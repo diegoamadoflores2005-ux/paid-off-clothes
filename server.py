@@ -379,6 +379,21 @@ def validate_catalog(products, pricing):
         return ["pricing must be an object with a 'products' object"]
 
     categories = products.get("categories") or []
+    if "categories" in products:
+        if not isinstance(products["categories"], list) or not all(isinstance(c, str) for c in products["categories"]):
+            errors.append("categories must be an array of strings")
+        else:
+            seen_cats = set()
+            for c in products["categories"]:
+                if c == "All":
+                    continue
+                if not c.strip():
+                    errors.append("categories: a category name is blank")
+                elif c.lower() in seen_cats:
+                    errors.append(f"categories: duplicate category '{c}'")
+                else:
+                    seen_cats.add(c.lower())
+
     seen_ids, seen_names = set(), set()
     for i, p in enumerate(products["products"]):
         where = f"product #{i + 1}"

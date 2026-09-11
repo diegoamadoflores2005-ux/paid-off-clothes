@@ -155,6 +155,7 @@ textarea{resize:vertical;min-height:56px}
     <div class="toolbar">
       <input type="text" id="search" placeholder="Search name or brand…" style="min-width:220px" />
       <select id="filter-cat"><option value="">All categories</option></select>
+      <button class="btn btn-sm" id="manage-cats-btn" type="button">Manage categories</button>
       <select id="filter-status">
         <option value="">Any status</option>
         <option value="available">In stock</option>
@@ -379,10 +380,7 @@ async function boot() {
   const imgRes = await api("/api/admin/images");
   IMAGES = imgRes.ok ? (await imgRes.json()).images : [];
   $("login").hidden = true; $("app").hidden = false;
-  const sel = $("filter-cat");
-  (DOC.categories || []).filter((c) => c !== "All").forEach((c) => {
-    const o = document.createElement("option"); o.value = c; o.textContent = c; sel.appendChild(o);
-  });
+  refreshCategorySelects();
   render();
   renderShipments();
 }
@@ -1249,6 +1247,207 @@ function escapeHtml(t) {
   return String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// ---------- categories ----------
+// Categories are just DOC.categories — the same array products.json has always carried — plus the
+// per-category ladder in PRICING.categories, if one was ever set. There is no separate table or
+// endpoint: every change here goes through the same publishNow() a product edit already uses, so a
+// new/renamed/deleted category survives a refresh and a redeploy exactly like a product does, and
+// a failed publish rolls the in-memory change back rather than leaving the UI out of sync.
+function realCategories() {
+  return (DOC.categories || []).filter((c) => c !== "All");
+}
+
+function refreshCategorySelects() {
+  const cats = realCategories();
+  const opts = cats.map((c) => '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>').join("");
+
+  const fc = $("filter-cat");
+  const prevFc = fc.value;
+  fc.innerHTML = '<option value="">All categories</option>' + opts;
+  fc.value = cats.includes(prevFc) ? prevFc : "";
+
+  // Only present while the product editor is open.
+  const fCat = $("f-cat");
+  if (fCat) {
+    const prevSel = fCat.value;
+    fCat.innerHTML = opts;
+    fCat.value = cats.includes(prevSel) ? prevSel : (cats[0] || "");
+  }
+}
+
+async function publishCategoryChange() {
+  try { return await publishNow(); }
+  catch (e) { return { ok: false, errors: ["Could not reach the server: " + e.message] }; }
+}
+
+async function addCategory(rawName) {
+  const name = (rawName || "").trim();
+  if (!name) return { ok: false, error: "Category name can't be blank." };
+  if (name === "All") return { ok: false, error: '"All" is reserved for the storefront filter tile.' };
+  if (realCategories().some((c) => c.toLowerCase() === name.toLowerCase())) {
+    return { ok: false, error: 'Category "' + name + '" already exists.' };
+  }
+
+  if (!Array.isArray(DOC.categories) || !DOC.categories.length) DOC.categories = ["All"];
+  DOC.categories.push(name);
+
+  const result = await publishCategoryChange();
+  if (!result.ok) {
+    DOC.categories = DOC.categories.filter((c) => c !== name);
+    return { ok: false, error: result.errors.join("\n") };
+  }
+  refreshCategorySelects();
+  render();
+  toast('"' + name + '" added to categories');
+  return { ok: true, name };
+}
+
+async function renameCategory(oldName, rawNewName) {
+  const newName = (rawNewName || "").trim();
+  if (!newName) return { ok: false, error: "Category name can't be blank." };
+  if (newName === oldName) return { ok: true };
+  if (newName === "All") return { ok: false, error: '"All" is reserved for the storefront filter tile.' };
+  if (realCategories().some((c) => c.toLowerCase() === newName.toLowerCase())) {
+    return { ok: false, error: 'Category "' + newName + '" already exists.' };
+  }
+
+  const catsBefore = DOC.categories.slice();
+  const pricingCatsBefore = PRICING.categories ? Object.assign({}, PRICING.categories) : null;
+  const affectedProducts = DOC.products.filter((p) => p.category === oldName);
+  const affectedPricingNames = affectedProducts
+    .filter((p) => PRICING.products[p.name] && PRICING.products[p.name].category === oldName)
+    .map((p) => p.name);
+
+  DOC.categories = DOC.categories.map((c) => (c === oldName ? newName : c));
+  affectedProducts.forEach((p) => { p.category = newName; });
+  if (PRICING.categories && Object.prototype.hasOwnProperty.call(PRICING.categories, oldName)) {
+    PRICING.categories[newName] = PRICING.categories[oldName];
+    delete PRICING.categories[oldName];
+  }
+  affectedPricingNames.forEach((n) => { PRICING.products[n].category = newName; });
+
+  const result = await publishCategoryChange();
+  if (!result.ok) {
+    DOC.categories = catsBefore;
+    affectedProducts.forEach((p) => { p.category = oldName; });
+    if (pricingCatsBefore) PRICING.categories = pricingCatsBefore;
+    affectedPricingNames.forEach((n) => { if (PRICING.products[n]) PRICING.products[n].category = oldName; });
+    return { ok: false, error: result.errors.join("\n") };
+  }
+  refreshCategorySelects();
+  render();
+  toast('"' + oldName + '" renamed to "' + newName + '"');
+  return { ok: true, name: newName };
+}
+
+async function deleteCategory(name) {
+  const inUse = DOC.products.filter((p) => p.category === name).length;
+  if (inUse > 0) {
+    return { ok: false, error: '"' + name + '" is used by ' + inUse + ' product' + (inUse === 1 ? "" : "s") +
+      " — reassign or delete " + (inUse === 1 ? "it" : "them") + " first." };
+  }
+  if (realCategories().length <= 1) {
+    return { ok: false, error: "Can't delete the last remaining category." };
+  }
+
+  const catsBefore = DOC.categories.slice();
+  const pricingCatsBefore = PRICING.categories ? Object.assign({}, PRICING.categories) : null;
+
+  DOC.categories = DOC.categories.filter((c) => c !== name);
+  if (PRICING.categories) delete PRICING.categories[name];
+
+  const result = await publishCategoryChange();
+  if (!result.ok) {
+    DOC.categories = catsBefore;
+    if (pricingCatsBefore) PRICING.categories = pricingCatsBefore;
+    return { ok: false, error: result.errors.join("\n") };
+  }
+  refreshCategorySelects();
+  render();
+  toast('"' + name + '" deleted');
+  return { ok: true };
+}
+
+function openCategoryManager() {
+  const ov = document.createElement("div");
+  ov.className = "overlay"; ov.id = "cat-manager";
+  ov.innerHTML =
+    '<div class="panel" style="max-width:520px">' +
+      '<h2>Manage categories</h2>' +
+      '<p class="hint">Renaming updates every product using it immediately. A category still in use ' +
+      "can't be deleted &mdash; reassign its products first. Changes publish right away, same as a " +
+      'product edit.</p>' +
+      '<div class="row" style="margin-top:16px;flex-wrap:wrap">' +
+        '<input type="text" id="cm-new" placeholder="New category, e.g. Hoodies" style="min-width:140px;flex:1">' +
+        '<button type="button" class="btn btn-sm btn-primary" id="cm-add">+ Add</button>' +
+      '</div>' +
+      '<p class="hint" id="cm-add-err" style="color:var(--bad);min-height:18px"></p>' +
+      '<div id="cm-list"></div>' +
+      '<div class="actions"><span class="sp"></span><button class="btn" id="cm-close">Close</button></div>' +
+    '</div>';
+  document.body.appendChild(ov);
+
+  function renderList() {
+    const list = $("cm-list");
+    const cats = realCategories();
+    if (!cats.length) { list.innerHTML = '<p class="hint">No categories yet.</p>'; return; }
+    list.innerHTML = "";
+    cats.forEach((name) => {
+      const count = DOC.products.filter((p) => p.category === name).length;
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.flexWrap = "wrap";
+      row.innerHTML =
+        '<input type="text" value="' + escapeHtml(name) + '" style="flex:1;min-width:120px">' +
+        '<span class="hint mono hide-sm" style="white-space:nowrap">' + count + (count === 1 ? " item" : " items") + '</span>' +
+        '<button type="button" class="btn btn-sm" data-act="rename">Rename</button>' +
+        '<button type="button" class="btn btn-sm btn-danger" data-act="delete"' +
+          (count > 0 ? ' disabled title="In use — reassign its products first"' : '') + '>Delete</button>';
+      list.appendChild(row);
+
+      const input = row.querySelector("input");
+      const renameBtn = row.querySelector('[data-act="rename"]');
+      renameBtn.addEventListener("click", async () => {
+        if (input.value.trim() === name) return;
+        renameBtn.disabled = true;
+        const r = await renameCategory(name, input.value);
+        renameBtn.disabled = false;
+        if (!r.ok) { input.value = name; alert(r.error); return; }
+        renderList();
+      });
+
+      const delBtn = row.querySelector('[data-act="delete"]');
+      delBtn.addEventListener("click", async () => {
+        if (count > 0) return;
+        if (!confirm('Delete category "' + name + '"? This cannot be undone.')) return;
+        delBtn.disabled = true;
+        const r = await deleteCategory(name);
+        if (!r.ok) { delBtn.disabled = false; alert(r.error); return; }
+        renderList();
+      });
+    });
+  }
+  renderList();
+
+  $("cm-add").addEventListener("click", async () => {
+    const btn = $("cm-add"); btn.disabled = true;
+    const r = await addCategory($("cm-new").value);
+    btn.disabled = false;
+    if (!r.ok) { $("cm-add-err").textContent = r.error; return; }
+    $("cm-add-err").textContent = ""; $("cm-new").value = "";
+    renderList();
+  });
+  $("cm-new").addEventListener("keydown", (e) => { if (e.key === "Enter") $("cm-add").click(); });
+
+  const close = () => ov.remove();
+  $("cm-close").addEventListener("click", close);
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+  document.addEventListener("keydown", function esc(e) {
+    if (e.key === "Escape") { close(); document.removeEventListener("keydown", esc); }
+  });
+}
+$("manage-cats-btn").addEventListener("click", openCategoryManager);
+
 // ---------- editor ----------
 function blankProduct() {
   const cats = (DOC.categories || []).filter((c) => c !== "All");
@@ -1279,8 +1478,20 @@ function openEditor(index) {
       '<div class="grid">' +
         '<div class="field"><label>Name</label><input type="text" id="f-name"></div>' +
         '<div class="field"><label>Brand</label><input type="text" id="f-brand" placeholder="[brand?] if unknown"></div>' +
-        '<div class="field"><label>Category</label><select id="f-cat">' +
-          cats.map((c) => '<option value="' + c + '">' + c + '</option>').join("") + '</select></div>' +
+        '<div class="field"><label>Category</label>' +
+          '<div class="row" style="margin-bottom:0">' +
+            '<select id="f-cat" style="flex:1">' +
+              cats.map((c) => '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>').join("") +
+            '</select>' +
+            '<button type="button" class="btn btn-sm" id="f-cat-add-btn">+ Add</button>' +
+          '</div>' +
+          '<div class="row" id="f-cat-add-row" hidden style="margin-top:7px;margin-bottom:0;flex-wrap:wrap">' +
+            '<input type="text" id="f-cat-new" placeholder="New category name" style="min-width:140px;flex:1">' +
+            '<button type="button" class="btn btn-sm btn-primary" id="f-cat-add-confirm">Add</button>' +
+            '<button type="button" class="btn btn-sm" id="f-cat-add-cancel">Cancel</button>' +
+          '</div>' +
+          '<p class="hint" id="f-cat-add-err" style="color:var(--bad)"></p>' +
+        '</div>' +
         '<div class="field"><label>Retail price</label><input type="number" step="0.01" min="0" id="f-retail"></div>' +
         '<div class="field full"><label>Short description</label><textarea id="f-desc"></textarea></div>' +
       '</div>' +
@@ -1345,6 +1556,33 @@ function openEditor(index) {
   // populate
   $("f-name").value = p.name; $("f-brand").value = p.brand || "";
   $("f-cat").value = p.category;
+
+  // Adding a category here publishes immediately (see addCategory), so it exists in the database
+  // and survives a refresh even if this product edit is later cancelled.
+  $("f-cat-add-btn").addEventListener("click", () => {
+    $("f-cat-add-row").hidden = false;
+    $("f-cat-add-btn").hidden = true;
+    $("f-cat-new").value = ""; $("f-cat-add-err").textContent = "";
+    $("f-cat-new").focus();
+  });
+  const closeCatAdd = () => {
+    $("f-cat-add-row").hidden = true;
+    $("f-cat-add-btn").hidden = false;
+    $("f-cat-add-err").textContent = "";
+  };
+  $("f-cat-add-cancel").addEventListener("click", closeCatAdd);
+  const confirmCatAdd = async () => {
+    const btn = $("f-cat-add-confirm"); btn.disabled = true;
+    const r = await addCategory($("f-cat-new").value);
+    btn.disabled = false;
+    if (!r.ok) { $("f-cat-add-err").textContent = r.error; return; }
+    $("f-cat").value = r.name;
+    touched = true;
+    closeCatAdd();
+  };
+  $("f-cat-add-confirm").addEventListener("click", confirmCatAdd);
+  $("f-cat-new").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); confirmCatAdd(); } });
+
   // Empty, not "0" — a new product showing 0 sails past validation and publishes priced at nothing.
   $("f-retail").value = (typeof p.retailPrice === "number") ? p.retailPrice : "";
   $("f-desc").value = p.description || "";
