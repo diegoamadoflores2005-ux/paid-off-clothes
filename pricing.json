@@ -45,31 +45,6 @@
     }
   ],
   "categories": {
-    "T-Shirts": {
-      "bulkNoun": "shirt",
-      "tiers": [
-        {
-          "id": "retail",
-          "label": "Single",
-          "minQty": 1
-        },
-        {
-          "id": "smallBulk",
-          "label": "Small bulk",
-          "minQty": 5
-        },
-        {
-          "id": "bulk",
-          "label": "Bulk",
-          "minQty": 10
-        },
-        {
-          "id": "largeBulk",
-          "label": "Large bulk",
-          "minQty": 20
-        }
-      ]
-    },
     "Shorts": {
       "tiers": [
         {
@@ -142,30 +117,6 @@
         }
       ]
     },
-    "Backpacks": {
-      "tiers": [
-        {
-          "id": "retail",
-          "label": "Single",
-          "minQty": 1
-        },
-        {
-          "id": "smallBulk",
-          "label": "Small bulk",
-          "minQty": 3
-        },
-        {
-          "id": "bulk",
-          "label": "Bulk",
-          "minQty": 6
-        },
-        {
-          "id": "largeBulk",
-          "label": "Large bulk",
-          "minQty": 12
-        }
-      ]
-    },
     "Bags": {
       "tiers": [
         {
@@ -189,11 +140,36 @@
           "minQty": 12
         }
       ]
+    },
+    "Shirts": {
+      "bulkNoun": "shirt",
+      "tiers": [
+        {
+          "id": "retail",
+          "label": "Single",
+          "minQty": 1
+        },
+        {
+          "id": "smallBulk",
+          "label": "Small bulk",
+          "minQty": 5
+        },
+        {
+          "id": "bulk",
+          "label": "Bulk",
+          "minQty": 10
+        },
+        {
+          "id": "largeBulk",
+          "label": "Large bulk",
+          "minQty": 20
+        }
+      ]
     }
   },
   "products": {
     "Backpack — Black": {
-      "category": "Backpacks",
+      "category": "Bags",
       "prices": {
         "retail": 70,
         "smallBulk": 70,
@@ -202,7 +178,7 @@
       }
     },
     "Backpack — Brown": {
-      "category": "Backpacks",
+      "category": "Bags",
       "prices": {
         "retail": 70,
         "smallBulk": 70,
@@ -211,7 +187,7 @@
       }
     },
     "Backpack — Green": {
-      "category": "Backpacks",
+      "category": "Bags",
       "prices": {
         "retail": 70,
         "smallBulk": 70,
@@ -339,7 +315,7 @@
     },
     "3D Logo Tee": {
       "brand": "Amiri",
-      "category": "T-Shirts",
+      "category": "Shirts",
       "prices": {
         "retail": 24.99,
         "smallBulk": 21,
@@ -349,7 +325,7 @@
     },
     "Graphic Tee — Style 1": {
       "brand": "That's An Awful Lot Of Cough Syrup",
-      "category": "T-Shirts",
+      "category": "Shirts",
       "prices": {
         "retail": 24.99,
         "smallBulk": 21,
@@ -359,7 +335,7 @@
     },
     "Graphic Tee — Style 2": {
       "brand": "That's An Awful Lot Of Cough Syrup",
-      "category": "T-Shirts",
+      "category": "Shirts",
       "prices": {
         "retail": 24.99,
         "smallBulk": 21,
@@ -369,7 +345,7 @@
     },
     "Graphic Tee — Style 3": {
       "brand": "That's An Awful Lot Of Cough Syrup",
-      "category": "T-Shirts",
+      "category": "Shirts",
       "prices": {
         "retail": 24.99,
         "smallBulk": 21,
@@ -379,7 +355,7 @@
     },
     "Logo Tee": {
       "brand": "Amiri",
-      "category": "T-Shirts",
+      "category": "Shirts",
       "prices": {
         "retail": 24.99,
         "smallBulk": 21,
