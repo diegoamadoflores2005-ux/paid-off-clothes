@@ -1087,15 +1087,32 @@ def bootstrap():
     # Idempotent: once corrected, the file this reads back only ever reflects the corrected state.
     if os.path.exists(PRODUCTS_FILE):
         with open(PRODUCTS_FILE) as f:
-            real_categories = set(json.load(f).get("categories") or [])
+            cats_in_file = json.load(f).get("categories") or []
+        real_categories = set(cats_in_file)
         if real_categories:
             conn = store.connect()
             try:
                 rows = conn.execute("SELECT name FROM categories").fetchall()
+                known = {r["name"] for r in rows}
                 conn.executemany(
                     "UPDATE categories SET in_products_json=? WHERE name=?",
                     [(1 if r["name"] in real_categories else 0, r["name"]) for r in rows],
                 )
+                # A category can reach products.json without ever reaching the database — most
+                # commonly a hand-edit to the file instead of going through the admin dashboard.
+                # Without this, the next line below (which regenerates products.json FROM the
+                # database) would silently wipe it back out, since the database never learned it
+                # exists. Insert it instead, appended after whatever positions are already taken so
+                # existing category order is untouched.
+                missing = [c for c in cats_in_file if c not in known]
+                if missing:
+                    next_pos = conn.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 AS n FROM categories").fetchone()["n"]
+                    conn.executemany(
+                        "INSERT INTO categories(name, position, bulk_noun, pricing_position, in_products_json) "
+                        "VALUES (?,?,NULL,NULL,1)",
+                        [(c, next_pos + i) for i, c in enumerate(missing)],
+                    )
                 conn.commit()
             finally:
                 conn.close()
