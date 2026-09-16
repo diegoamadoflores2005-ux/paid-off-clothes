@@ -158,5 +158,18 @@
       "mid": null,
       "far": null
     }
-  }
+  },
+  "zone_map": {},
+  "_zone_map_README": [
+    "USPS zone for a destination, keyed by the first THREE digits of its ZIP. Empty, and it must",
+    "be filled from the published chart — a zone is not computable from distance, and I will not",
+    "guess one. Get it from postcalc.usps.com/DomesticZoneChart with origin 856: it returns every",
+    "destination prefix and its zone, which is exactly this mapping.",
+    "",
+    "Example of the shape once filled: {\"902\": 4, \"100\": 8, \"606\": 6}",
+    "",
+    "UNTIL THIS IS POPULATED, ZONE PRICING IS OFF and the flat ladder runs — see",
+    "zone_pricing_ready() in db/orders.py. A half-filled map would quote some buyers by zone and",
+    "others by the flat table, which is worse than either."
+  ]
 }

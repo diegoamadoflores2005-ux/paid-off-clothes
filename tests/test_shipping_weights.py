@@ -240,5 +240,121 @@ class TestRateTable(unittest.TestCase):
                                     f"{lb} lb is charged less than {lb - 1} lb")
 
 
+class TestZonePricing(unittest.TestCase):
+    """Zone-aware shipping, exercised against a synthetic table.
+
+    The real shipping_rates.json is empty on purpose — no quote has been collected yet — so these
+    build a filled one in a temp file and point the module at it. That tests the machinery without
+    inventing a rate anyone might mistake for a carrier quote.
+    """
+
+    def _with_rates(self, rates):
+        import json
+        import tempfile
+        orders = load_orders()
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        json.dump(rates, fh)
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+        orders._RATES_PATH = fh.name
+        orders._rates_cache["mtime"] = None
+        return orders
+
+    def _full_table(self):
+        bands = ["sub"] + [str(b) for b in range(2, 10)]
+        return {
+            "origin_zip": "85641",
+            "zone_policy": "banded",
+            "zone_groups": {"near": {"zones": [1, 2, 3, 4]},
+                            "mid": {"zones": [5, 6]},
+                            "far": {"zones": [7, 8, 9]}},
+            "zone_map": {"902": 4, "800": 5, "100": 8},
+            "rate_table": {
+                "core": {b: {"near": 5 + i, "mid": 6 + i, "far": 7 + i}
+                         for i, b in enumerate(bands)},
+                "heavy": {},
+                "over_max": {"near": 30, "mid": 33, "far": 36},
+            },
+        }
+
+    # ---- the gate ------------------------------------------------------------------------------
+    def test_the_real_table_is_not_ready_yet(self):
+        """Nothing has been quoted, so the live site must still be on the flat ladder."""
+        orders = load_orders()
+        self.assertFalse(orders.zone_pricing_ready(),
+                         "zone pricing must stay off until every required cell holds a quote")
+
+    def test_an_empty_zone_map_keeps_zone_pricing_off(self):
+        rates = self._full_table()
+        rates["zone_map"] = {}
+        orders = self._with_rates(rates)
+        self.assertFalse(orders.zone_pricing_ready())
+        self.assertIsNone(orders.zone_shipping_cents(38, "90210"))
+
+    def test_one_missing_cell_keeps_zone_pricing_off(self):
+        """All or nothing: a partly filled table would price two identical baskets by different
+        rules depending on which cell happened to be filled."""
+        rates = self._full_table()
+        rates["rate_table"]["core"]["5"]["mid"] = None
+        orders = self._with_rates(rates)
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_complete_table_switches_zone_pricing_on(self):
+        orders = self._with_rates(self._full_table())
+        self.assertTrue(orders.zone_pricing_ready())
+
+    # ---- the mapping ---------------------------------------------------------------------------
+    def test_zone_comes_from_the_map_never_from_distance(self):
+        orders = self._with_rates(self._full_table())
+        self.assertEqual(orders.zone_for_zip("90210"), 4)
+        self.assertEqual(orders.zone_for_zip("90210-1234"), 4, "ZIP+4 must resolve on the prefix")
+        self.assertIsNone(orders.zone_for_zip("59718"), "an unmapped prefix is unknown, not guessed")
+        self.assertIsNone(orders.zone_for_zip("9"), "too short to carry a prefix")
+        self.assertIsNone(orders.zone_for_zip(""))
+
+    def test_groups_resolve_from_zones(self):
+        orders = self._with_rates(self._full_table())
+        self.assertEqual(orders.group_for_zone(4), "near")
+        self.assertEqual(orders.group_for_zone(5), "mid")
+        self.assertEqual(orders.group_for_zone(8), "far")
+        self.assertIsNone(orders.group_for_zone(None))
+
+    # ---- pricing -------------------------------------------------------------------------------
+    def test_the_same_basket_costs_more_further_away(self):
+        """The whole point of zone pricing."""
+        orders = self._with_rates(self._full_table())
+        near = orders.zone_shipping_cents(38, "90210")     # zone 4
+        mid = orders.zone_shipping_cents(38, "80001")      # prefix 800 -> zone 5
+        far = orders.zone_shipping_cents(38, "10001")      # zone 8
+        self.assertLess(near, mid)
+        self.assertLess(mid, far)
+
+    def test_an_unmapped_destination_falls_back_rather_than_guessing(self):
+        orders = self._with_rates(self._full_table())
+        self.assertIsNone(orders.zone_shipping_cents(38, "59718"),
+                          "an unknown prefix must not be priced at a neighbouring zone")
+
+    def test_band_is_the_rounded_up_pound(self):
+        orders = load_orders()
+        self.assertEqual(orders.band_for_oz(10), "sub")
+        self.assertEqual(orders.band_for_oz(15.99), "sub")
+        self.assertEqual(orders.band_for_oz(17), "2")
+        self.assertEqual(orders.band_for_oz(38), "3")
+        self.assertEqual(orders.band_for_oz(143), "9", "20 shirts is a 9 lb parcel")
+
+    def test_above_the_top_band_uses_the_fallback_for_that_group(self):
+        orders = self._with_rates(self._full_table())
+        self.assertEqual(orders.zone_shipping_cents(400, "90210"), 3000)
+        self.assertEqual(orders.zone_shipping_cents(400, "10001"), 3600)
+
+    def test_no_zip_means_the_flat_ladder(self):
+        """Every cart. There is no address at that point, so there is no zone to price by."""
+        orders = self._with_rates(self._full_table())
+        self.assertEqual(orders.shipping_source(None), "estimate")
+        self.assertEqual(orders.shipping_source("90210"), "zone")
+        self.assertEqual(orders.shipping_source("59718"), "estimate",
+                         "an unmapped destination is still an estimate")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

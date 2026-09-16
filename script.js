@@ -1200,9 +1200,7 @@ function openCheckout(items) {
   document.getElementById("checkout-items").innerHTML = items.map((p) => checkoutItemRow(p, false, items)).join("");
   document.getElementById("checkout-bulk-feedback").innerHTML = bulkFeedbackHtml(items, false);
   document.getElementById("checkout-subtotal").textContent = money(subtotal);
-  document.getElementById("checkout-shipping").textContent = money(shipping);
-  document.getElementById("checkout-ship-note").textContent = `(${(orderWeightOz(items) / 16).toFixed(1)} lb, Ground Advantage)`;
-  document.getElementById("checkout-total-price").textContent = money(total);
+
   document.getElementById("checkout-form").reset();
   document.getElementById("checkout-form-view").hidden = false;
   document.getElementById("checkout-success-view").hidden = true;
@@ -1210,6 +1208,9 @@ function openCheckout(items) {
   const payBtn = document.getElementById("checkout-pay-btn");
   payBtn.disabled = false;
   applyPaymentCopy(total);
+  // Opens on the flat-ladder estimate, then replaces it the moment a ZIP resolves to a zone.
+  setCheckoutShipping(shipping, "estimate", null);
+  refreshCheckoutShipping();
 
   document.getElementById("checkout-overlay").hidden = false;
   syncBodyScroll();
@@ -1289,6 +1290,64 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
       triggerLabelEl.textContent = "Try again";
       showCheckoutError("Could not reach the server. Nothing has been charged.");
     });
+}
+
+// ---------- zone shipping ----------
+// The cart shows an ESTIMATE: it has no address, so it prices off the flat ladder. The checkout
+// panel asks the SERVER for the real figure as soon as a ZIP is entered — never recomputed here,
+// so the number on screen is the number that will be charged. A second implementation in the
+// browser is exactly how a cart figure and a card charge end up disagreeing.
+let shippingQuoteSeq = 0;
+let checkoutShippingSource = "estimate";
+
+// One writer for the shipping figure, the total and the wording, so they cannot disagree on screen.
+function setCheckoutShipping(shipping, source, group) {
+  const subtotal = lineTotal(checkoutItems);
+  const total = subtotal + shipping;
+  document.getElementById("checkout-shipping").textContent = money(shipping);
+  document.getElementById("checkout-total-price").textContent = money(total);
+
+  const lb = (orderWeightOz(checkoutItems) / 16).toFixed(1);
+  const note = document.getElementById("checkout-ship-note");
+  if (note) {
+    note.textContent = source === "zone"
+      ? `(${lb} lb, Ground Advantage, ${group || "your"} zone)`
+      : `(${lb} lb, estimated — enter your ZIP for the exact rate)`;
+  }
+  const payAmount = document.getElementById("checkout-pay-amount");
+  if (payAmount) payAmount.textContent = money(total);
+  checkoutShippingSource = source;
+}
+
+async function refreshCheckoutShipping() {
+  const zipEl = document.getElementById("co-zip");
+  const zip = (zipEl ? zipEl.value : "").trim();
+  if (!checkoutItems.length) return;
+
+  // A US ZIP is five digits; anything shorter cannot resolve to a zone, so don't ask.
+  if (zip.replace(/\D/g, "").length < 5) {
+    setCheckoutShipping(shippingFor(checkoutItems), "estimate", null);
+    return;
+  }
+
+  const seq = ++shippingQuoteSeq;
+  try {
+    const res = await fetch("/api/shipping/quote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: checkoutItems.map((l) => ({ id: l.id, name: fullName(l), size: l.size, qty: l.qty })),
+        zip,
+      }),
+    });
+    const data = await res.json();
+    if (seq !== shippingQuoteSeq) return;   // a slow earlier reply must not overwrite a newer one
+    if (data && data.ok) {
+      setCheckoutShipping(data.shipping, data.source, data.zone_group);
+      return;
+    }
+  } catch (err) { /* offline or file:// — fall through to the estimate */ }
+  if (seq === shippingQuoteSeq) setCheckoutShipping(shippingFor(checkoutItems), "estimate", null);
 }
 
 // ---------- stripe checkout ----------
@@ -1482,6 +1541,16 @@ function initCheckout() {
     if (e.target.id === "checkout-overlay") closeCheckout();
   });
 
+  const zipEl = document.getElementById("co-zip");
+  if (zipEl) {
+    let t = null;
+    zipEl.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(refreshCheckoutShipping, 250);   // one request per pause, not per keystroke
+    });
+    zipEl.addEventListener("blur", refreshCheckoutShipping);
+  }
+
   document.getElementById("checkout-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const payBtn = document.getElementById("checkout-pay-btn");
@@ -1618,7 +1687,7 @@ function renderCartItems() {
   const cartShip = shippingFor(cart);
   document.getElementById("cart-subtotal").textContent = money(cartSub);
   document.getElementById("cart-shipping").textContent = money(cartShip);
-  document.getElementById("cart-ship-note").textContent = cart.length ? `(${(orderWeightOz(cart) / 16).toFixed(1)} lb)` : "";
+  document.getElementById("cart-ship-note").textContent = cart.length ? `(${(orderWeightOz(cart) / 16).toFixed(1)} lb, before ZIP)` : "";
   document.getElementById("cart-total-price").textContent = money(cartSub + cartShip);
 
   bindCartClicks(wrap);

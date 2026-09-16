@@ -342,6 +342,25 @@ with quotes from Pirate Ship's calculator for the zones actually shipped to.
 `shippingFor(lines)` and `orderWeightOz(lines)` drive the cart, the checkout panel, and the stored
 order. Format money with `money(n)` so everything reads as two decimals.
 
+**Zone pricing: estimate in the cart, real rate at checkout.** Ground Advantage is priced on weight
+AND zone, but the cart has no address — so the cart is labelled *Estimated shipping* and prices off
+the flat ladder, and the checkout panel replaces that figure once a ZIP is entered. The checkout
+figure comes from `POST /api/shipping/quote`, i.e. **from the server**, computed by the same
+`orders.quote()` that prices the order and builds the Stripe session. There is deliberately no
+second implementation in the browser: that is how a displayed figure and a charged one drift apart.
+`setCheckoutShipping()` is the single writer for the shipping line, the total and the button
+amount, so those three can never disagree on screen.
+
+**`zone_pricing_ready()` is all-or-nothing.** It requires a non-empty `zone_map` AND every core and
+fallback cell in `shipping_rates.json` to hold a price. Until then every order prices off the flat
+ladder. A partly-filled table would price two identical baskets by different rules depending on
+which cell happened to be filled, with nothing on the page to say so.
+
+**A zone is never inferred from distance.** `zone_for_zip()` reads `zone_map`, keyed on the
+destination's first three digits. USPS publishes the chart per origin; mileage only approximates
+it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
+neighbouring zone's price.
+
 ## Shipping labels (Pirate Ship)
 
 **Pirate Ship has no API** — that is a deliberate product decision on their end, not a missing

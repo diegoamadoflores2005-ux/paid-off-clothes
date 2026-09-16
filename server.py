@@ -960,6 +960,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({"ok": True, "current": current_bid})
             return
 
+        # Shipping for a basket at a real destination. The checkout panel calls this once the
+        # buyer has typed a ZIP, so the figure on screen is computed by the same code that will
+        # charge the card — not a second implementation in the browser that could drift from it.
+        if self.path == "/api/shipping/quote":
+            payload = self._read_json()
+            items = payload.get("items") if isinstance(payload, dict) else None
+            dest_zip = str(payload.get("zip", "")).strip() if isinstance(payload, dict) else ""
+            if not isinstance(items, list) or not items:
+                self._send_json({"ok": False, "error": "No items."}, status=400)
+                return
+            requested = [{"id": it.get("id"), "name": it.get("name"),
+                          "size": it.get("size"), "qty": it.get("qty")}
+                         for it in items if isinstance(it, dict)]
+            conn = store.connect()
+            try:
+                q = orders.quote(conn, requested, dest_zip=dest_zip or None)
+            except orders.OrderError as e:
+                self._send_json({"ok": False, "error": e.message}, status=409)
+                return
+            except Exception:
+                self._send_json({"ok": False, "error": "Could not price that."}, status=500)
+                return
+            finally:
+                conn.close()
+            zone = orders.zone_for_zip(dest_zip) if dest_zip else None
+            self._send_json({
+                "ok": True,
+                "subtotal": q["subtotal_cents"] / 100,
+                "shipping": q["shipping_cents"] / 100,
+                "total": q["total_cents"] / 100,
+                "weight_oz": q["weight_oz"],
+                # 'zone' means this is the charged rate; 'estimate' means the flat ladder applied,
+                # because the table cannot price this destination yet.
+                "source": q.get("shipping_source", "estimate"),
+                "zone": zone,
+                "zone_group": orders.group_for_zone(zone) if zone else None,
+            })
+            return
+
         # ---- Stripe Checkout ------------------------------------------------------------------
         # The browser never sends a price. It sends name/size/qty, the order is created and priced
         # by db/orders.py exactly as the reserve flow does, and the Checkout Session is built from

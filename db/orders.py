@@ -10,7 +10,7 @@ STOCK IS RESERVED, NOT DEDUCTED, UNTIL PAYMENT IS CONFIRMED. A pending order hol
 inventory_reservations; product_sizes.qty only moves when payment lands. An abandoned checkout
 therefore cannot eat inventory, and a refund can hand it back.
 """
-import json, secrets, sqlite3, threading, time
+import json, os, secrets, sqlite3, threading, time
 
 STATUSES = ("pending", "paid", "fulfilled", "cancelled", "failed", "refunded")
 
@@ -91,15 +91,31 @@ def _weight_oz(product):
     return CATEGORY_WEIGHT_OZ.get(product["category"], DEFAULT_WEIGHT_OZ)
 
 
-def shipping_cents(lines):
-    """lines: [(product_row, size, qty)]"""
+def shipping_cents(lines, dest_zip=None):
+    """lines: [(product_row, size, qty)]; dest_zip when the buyer has given an address.
+
+    Zone pricing is used when the verified table can price this order, and the flat ladder
+    otherwise — including every cart, which has no address yet. `shipping_source` below says which
+    applied, so the checkout panel can show the buyer a real figure rather than an estimate.
+    """
     if not lines:
         return 0, 0.0
     oz = sum(_weight_oz(p) * q for p, _s, q in lines) + PACKAGING_OZ
+    if dest_zip:
+        zoned = zone_shipping_cents(oz, dest_zip)
+        if zoned is not None:
+            return zoned, float(oz)
     for max_oz, price in SHIPPING_TIERS:
         if oz <= max_oz:
             return price, float(oz)
     return SHIPPING_OVER_MAX, float(oz)
+
+
+def shipping_source(dest_zip=None):
+    """'zone' when this destination would be priced from the verified table, else 'estimate'."""
+    if not dest_zip or not zone_pricing_ready():
+        return "estimate"
+    return "zone" if group_for_zone(zone_for_zip(dest_zip)) else "estimate"
 
 
 def _resolve_product(conn, product_id, name):
@@ -124,10 +140,11 @@ def _resolve_product(conn, product_id, name):
         (name,)).fetchone()
 
 
-def quote(conn, requested):
+def quote(conn, requested, dest_zip=None):
     """Price a basket from scratch.
 
     requested: [{name, size, qty}] — exactly what the browser is allowed to influence.
+    dest_zip is used for shipping only, and only when the verified zone table can price it.
     Returns the priced lines and the totals, all in integer cents.
     """
     if not requested:
@@ -185,9 +202,10 @@ def quote(conn, requested):
             "category": r["product"]["category"],
         })
 
-    ship, oz = shipping_cents([(r["product"], r["size"], r["qty"]) for r in resolved])
+    ship, oz = shipping_cents([(r["product"], r["size"], r["qty"]) for r in resolved], dest_zip)
     return {"lines": lines, "subtotal_cents": subtotal, "shipping_cents": ship,
-            "total_cents": subtotal + ship, "weight_oz": oz}
+            "total_cents": subtotal + ship, "weight_oz": oz,
+            "shipping_source": shipping_source(dest_zip)}
 
 
 # ---- inventory ---------------------------------------------------------------------------------
@@ -233,7 +251,9 @@ def create_order(conn, email, requested, ship_to, idempotency_key=None):
                     return {"order_id": existing["id"], "order_ref": existing["order_ref"],
                             "duplicate": True}
 
-            q = quote(conn, requested)
+            # The ZIP is on the order, so the charged figure is the zone figure — this is the
+            # one place shipping is decided for real, and Stripe is built from its result.
+            q = quote(conn, requested, dest_zip=(ship_to or {}).get("zip"))
             check_stock(conn, q["lines"])
 
             now = time.time()
@@ -271,7 +291,8 @@ def create_order(conn, email, requested, ship_to, idempotency_key=None):
             conn.commit()
             return {"order_id": order_id, "order_ref": ref, "duplicate": False,
                     "subtotal_cents": q["subtotal_cents"], "shipping_cents": q["shipping_cents"],
-                    "total_cents": q["total_cents"], "lines": q["lines"]}
+                    "total_cents": q["total_cents"], "lines": q["lines"],
+                    "shipping_source": q.get("shipping_source", "estimate")}
         except Exception:
             conn.rollback()
             raise
@@ -546,3 +567,105 @@ def amount_matches(order_row, amount_cents, currency="usd"):
     if (order_row["currency"] or "USD").lower() != (currency or "usd").lower():
         return False
     return int(amount_cents) == int(order_row["total_cents"])
+
+
+# ---- zone-aware shipping -------------------------------------------------------------------------
+# Ground Advantage is priced on weight AND zone. The flat SHIPPING_TIERS ladder above ignores zone
+# and is what runs until the verified table in shipping_rates.json is complete. The switch is
+# deliberate and all-or-nothing: quoting some buyers by zone and others off the flat table would be
+# worse than either, because two identical baskets to two addresses would be priced by different
+# rules with nothing on the page to say so.
+_RATES_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "shipping_rates.json")
+_rates_cache = {"mtime": None, "data": None}
+
+
+def load_rates():
+    """Read shipping_rates.json, re-reading only when it changes on disk."""
+    try:
+        mtime = os.path.getmtime(_RATES_PATH)
+    except OSError:
+        return {}
+    if _rates_cache["mtime"] != mtime:
+        try:
+            with open(_RATES_PATH, encoding="utf-8") as fh:
+                _rates_cache["data"] = json.load(fh)
+        except (OSError, ValueError):
+            _rates_cache["data"] = {}
+        _rates_cache["mtime"] = mtime
+    return _rates_cache["data"] or {}
+
+
+def band_for_oz(oz):
+    """Which ladder band a parcel falls in: 'sub' under a pound, else the rounded-up pound."""
+    if oz <= 15.99:
+        return "sub"
+    return str(int(-(-float(oz) // 16)))
+
+
+def zone_for_zip(dest_zip, rates=None):
+    """USPS zone for a destination, by its 3-digit prefix. None when unknown.
+
+    Never guessed from distance. The zone chart is published per origin and the mapping is data,
+    not arithmetic — an inferred zone silently misprices every order to that prefix.
+    """
+    rates = load_rates() if rates is None else rates
+    digits = "".join(c for c in str(dest_zip or "") if c.isdigit())
+    if len(digits) < 3:
+        return None
+    return (rates.get("zone_map") or {}).get(digits[:3])
+
+
+def group_for_zone(zone, rates=None):
+    rates = load_rates() if rates is None else rates
+    for name, spec in (rates.get("zone_groups") or {}).items():
+        if zone in (spec.get("zones") or []):
+            return name
+    return None
+
+
+def required_cells(rates=None):
+    """Every cell that must hold a price before zone pricing may switch on.
+
+    'heavy' is excluded: those bands only occur for bulk shoes and bags, and the fallback covers
+    them. The core ladder and the fallback are what every ordinary order needs.
+    """
+    rates = load_rates() if rates is None else rates
+    table = rates.get("rate_table") or {}
+    cells = []
+    for band, row in (table.get("core") or {}).items():
+        for g in ("near", "mid", "far"):
+            cells.append((("core", band, g), (row or {}).get(g)))
+    for g in ("near", "mid", "far"):
+        cells.append((("over_max", "over", g), (table.get("over_max") or {}).get(g)))
+    return cells
+
+
+def zone_pricing_ready(rates=None):
+    """True only when the zone map AND every required rate cell are present.
+
+    All-or-nothing on purpose. A partly-filled table would fall back per-order, so the same basket
+    would cost different amounts depending on which cell happened to be filled.
+    """
+    rates = load_rates() if rates is None else rates
+    if not (rates.get("zone_map") or {}):
+        return False
+    return all(v is not None for _key, v in required_cells(rates))
+
+
+def zone_shipping_cents(oz, dest_zip, rates=None):
+    """Zone-priced postage in cents, or None if this order cannot be priced that way."""
+    rates = load_rates() if rates is None else rates
+    if not zone_pricing_ready(rates):
+        return None
+    group = group_for_zone(zone_for_zip(dest_zip, rates), rates)
+    if group is None:
+        return None
+    table = rates.get("rate_table") or {}
+    band = band_for_oz(oz)
+    for section in ("core", "heavy"):
+        row = (table.get(section) or {}).get(band)
+        if row and row.get(group) is not None:
+            return round(float(row[group]) * 100)
+    over = (table.get("over_max") or {}).get(group)
+    return None if over is None else round(float(over) * 100)
