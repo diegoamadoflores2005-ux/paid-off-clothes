@@ -1,0 +1,22 @@
+{
+  "_README": [
+    "Copy this to stripe_config.json and fill in your TEST keys. That file is gitignored, listed",
+    "in PRIVATE_FILES so the server 404s it, and blocked by tools/pre-commit even with `git add -f`.",
+    "",
+    "Environment variables win over this file, so a deployment can set STRIPE_SECRET_KEY,",
+    "STRIPE_WEBHOOK_SECRET and POC_PUBLIC_URL without writing a key to disk at all.",
+    "",
+    "secret_key      Stripe Dashboard > Developers > API keys. Must start sk_test_ for now: a",
+    "                sk_live_ key is REFUSED unless POC_ALLOW_LIVE_PAYMENTS=1 is set in the",
+    "                environment, so real money is never taken by accident.",
+    "webhook_secret  Printed by `stripe listen` as whsec_..., or shown when you add a webhook",
+    "                endpoint in the Dashboard. Without it payments stay off entirely — an order",
+    "                that can be paid but never confirmed is worse than one that cannot be paid.",
+    "public_url      Where Stripe sends the buyer back. Must be reachable from THEIR browser, so",
+    "                localhost is right for local testing and the real domain in production."
+  ],
+  "secret_key": "sk_test_REPLACE_ME",
+  "webhook_secret": "whsec_REPLACE_ME",
+  "publishable_key": "pk_test_REPLACE_ME",
+  "public_url": "http://localhost:8000"
+}

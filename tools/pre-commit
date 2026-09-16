@@ -4,18 +4,28 @@
 #
 # costs.json is here because this repo is PUBLIC: it holds supplier costs and landed cost, and
 # committing it would publish the margin on every item.
+# stripe_config.json holds the Stripe secret key and the webhook signing secret. Either one in a
+# public repo is a live financial credential.
 # .gitignore is a default; this is the actual stop. Install on each machine with:
 #   sh tools/install-hooks.sh
 #
 # Bypass deliberately (you had better be sure) with: git commit --no-verify
 
-blocked=$(git diff --cached --name-only | grep -E '(^|/)(admin_auth\.json|admin_token\.txt|costs\.json|secrets\.json|\.env(\..*)?)$|\.(key|pem|db|db-wal|db-shm)$')
+blocked=$(git diff --cached --name-only | grep -E '(^|/)(admin_auth\.json|admin_token\.txt|costs\.json|stripe_config\.json|secrets\.json|\.env(\..*)?)$|\.(key|pem|db|db-wal|db-shm)$')
 
 if [ -n "$blocked" ]; then
   echo "COMMIT BLOCKED — these files hold credentials and must never reach GitHub:" >&2
   echo "$blocked" | sed 's/^/  /' >&2
   echo "" >&2
   echo "Unstage them with:  git restore --staged <file>" >&2
+  exit 1
+fi
+
+# Catch a Stripe key pasted into a tracked file. sk_live_ is the one that costs real money, but
+# a test key in a public repo still lets a stranger run up API noise against the account.
+if git diff --cached -U0 | grep -qE '^\+.*(sk|rk|whsec)_(test|live)?_?[A-Za-z0-9]{16,}'; then
+  echo "COMMIT BLOCKED — a staged change looks like a Stripe secret or webhook signing secret." >&2
+  echo "Keys belong in stripe_config.json (gitignored) or the environment, never in a tracked file." >&2
   exit 1
 fi
 

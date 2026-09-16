@@ -1,0 +1,681 @@
+"""End-to-end tests for the Stripe Checkout integration. Standard library only.
+
+These run WITHOUT Stripe credentials and without touching the network. Two things make that
+honest rather than a shortcut:
+
+  * The webhook signature is real HMAC-SHA256 with a shared secret, so the tests generate genuine
+    signatures the same way Stripe does. Verification is exercised for real, not stubbed.
+  * The Stripe API call is replaced by a fake transport that RECORDS THE PARAMETERS. The assertions
+    are about what the server tells Stripe to charge, which is the part that matters and the part
+    a live key would not check any better.
+
+What they cannot cover is Stripe's own behaviour — that its hosted page renders, that a test card
+is accepted, that the event it really sends matches the shape used here. That is what the manual
+`stripe listen` run in STRIPE.md is for.
+
+    python3 tests/test_stripe_checkout.py
+"""
+import importlib.util
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+TEST_SECRET_KEY = "sk_test_fake_key_for_tests_only"
+TEST_WEBHOOK_SECRET = "whsec_fake_signing_secret_for_tests"
+
+server = None
+stripe_client = None
+orders = None
+store = None
+httpd = None
+BASE = None
+stripe_calls = []
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def setUpModule():
+    """Boot a real server against a throwaway database, with Stripe faked at the transport."""
+    global server, stripe_client, orders, store, httpd, BASE, _tmpdir
+
+    _tmpdir = tempfile.mkdtemp(prefix="poc-stripe-test-")
+    os.environ["POC_DATA_DIR"] = _tmpdir
+    os.environ["STRIPE_SECRET_KEY"] = TEST_SECRET_KEY
+    os.environ["STRIPE_WEBHOOK_SECRET"] = TEST_WEBHOOK_SECRET
+    os.environ["POC_PUBLIC_URL"] = "http://localhost:8000"
+    os.environ.pop("POC_ALLOW_LIVE_PAYMENTS", None)
+
+    # Seed the catalogue the real bootstrap would copy in.
+    for name in ("products.json", "pricing.json"):
+        shutil.copy2(os.path.join(APP_DIR, name), os.path.join(_tmpdir, name))
+
+    server = _load("poc_server", os.path.join(APP_DIR, "server.py"))
+    stripe_client = server.stripe_client
+    orders = server.orders
+    store = server.store
+    server.bootstrap()
+
+    # Fake transport. Everything above it — parameter building, amounts, idempotency keys — is the
+    # real code; only the socket is replaced.
+    def fake_request(method, path, params=None, secret_key=None, idempotency_key=None):
+        stripe_calls.append({"method": method, "path": path, "params": params,
+                             "idempotency_key": idempotency_key})
+        if path == "/checkout/sessions" and method == "POST":
+            sid = f"cs_test_{len(stripe_calls):08d}"
+            return {"id": sid, "url": f"https://checkout.stripe.com/c/pay/{sid}",
+                    "payment_intent": None, "status": "open"}
+        if path.startswith("/checkout/sessions/") and method == "GET":
+            return {"id": path.rsplit("/", 1)[-1], "status": "open",
+                    "url": f"https://checkout.stripe.com/c/pay/{path.rsplit('/', 1)[-1]}"}
+        return {}
+
+    stripe_client._request = fake_request
+
+    import http.server
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    BASE = f"http://127.0.0.1:{httpd.server_address[1]}"
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+
+def tearDownModule():
+    if httpd:
+        httpd.shutdown()
+        httpd.server_close()      # otherwise the listening socket leaks a ResourceWarning
+    shutil.rmtree(_tmpdir, ignore_errors=True)
+
+
+# ---------- helpers ------------------------------------------------------------------------------
+def post(path, body, headers=None, raw=False):
+    data = body if raw else json.dumps(body).encode()
+    req = urllib.request.Request(f"{BASE}{path}", data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
+
+
+def get(path):
+    try:
+        with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
+
+
+def signed_webhook(event, secret=TEST_WEBHOOK_SECRET, timestamp=None):
+    """A genuinely signed webhook, exactly as Stripe builds one."""
+    payload = json.dumps(event).encode()
+    ts = str(int(time.time()) if timestamp is None else timestamp)
+    sig = stripe_client.sign_payload(payload, secret, ts)
+    return payload, f"t={ts},v1={sig}"
+
+
+def db():
+    return store.connect()
+
+
+def order_row(ref):
+    conn = db()
+    try:
+        return orders.order_by_ref(conn, ref)
+    finally:
+        conn.close()
+
+
+def physical_qty(product_id, size):
+    conn = db()
+    try:
+        row = conn.execute("SELECT qty FROM product_sizes WHERE product_id=? AND size=?",
+                           (product_id, size)).fetchone()
+        return None if row is None else row["qty"]
+    finally:
+        conn.close()
+
+
+def available_qty(product_id, size):
+    conn = db()
+    try:
+        return orders.availability(conn, product_id, size)
+    finally:
+        conn.close()
+
+
+def a_shirt(need=1):
+    """A shirt style/size with at least `need` units FREE right now.
+
+    Chosen by live availability, not physical quantity: these tests leave real reservations and
+    deductions behind them, so a fixture that always returned the same row would hand the fifth
+    test a size the first four had already sold out.
+    """
+    conn = db()
+    try:
+        row = conn.execute("""SELECT p.id, p.name, a.size, a.available_qty FROM products p
+                              JOIN size_availability a ON a.product_id = p.id
+                              WHERE p.category='Shirts' AND p.status='available'
+                                AND a.available_qty >= ?
+                              ORDER BY a.available_qty DESC, p.id LIMIT 1""", (need,)).fetchone()
+        assert row is not None, f"catalogue has no shirt size with {need} units free"
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def two_shirt_styles(need=5):
+    """Two DIFFERENT styles each with `need` units free — for the pooled-quantity tests."""
+    conn = db()
+    try:
+        rows = conn.execute("""SELECT p.id, p.name, a.size, a.available_qty FROM products p
+                               JOIN size_availability a ON a.product_id = p.id
+                               WHERE p.category='Shirts' AND p.status='available'
+                                 AND a.available_qty >= ?
+                               ORDER BY a.available_qty DESC, p.id""", (need,)).fetchall()
+        seen, out = set(), []
+        for r in rows:
+            if r["id"] in seen:
+                continue
+            seen.add(r["id"])
+            out.append(dict(r))
+            if len(out) == 2:
+                break
+        assert len(out) == 2, f"catalogue needs two shirt styles with {need} units free"
+        return out
+    finally:
+        conn.close()
+
+
+def completed_event(session_id, order_ref, amount_cents, event_id=None, payment_status="paid",
+                    currency="usd", payment_intent=None):
+    # Stripe issues one PaymentIntent per payment, so the fixture must too — a shared id would
+    # collide on the unique index and test something that cannot happen.
+    payment_intent = payment_intent or f"pi_test_{session_id}_{int(time.time()*1000)}"
+    return {
+        "id": event_id or f"evt_test_{int(time.time()*1000)}_{len(stripe_calls)}",
+        "type": "checkout.session.completed",
+        "livemode": False,
+        "data": {"object": {
+            "id": session_id, "object": "checkout.session", "client_reference_id": order_ref,
+            "payment_status": payment_status, "amount_total": amount_cents, "currency": currency,
+            "payment_intent": payment_intent, "metadata": {"order_ref": order_ref},
+        }},
+    }
+
+
+def start_checkout(items, email="buyer@example.com", key=None):
+    return post("/api/checkout/session", {
+        "email": email,
+        "idempotency_key": key or f"test-{time.time()}-{len(stripe_calls)}",
+        "ship_to": {"name": "Test Buyer", "address1": "1 Test St", "city": "Houston",
+                    "state": "TX", "zip": "77001", "country": "US"},
+        "items": items,
+    })
+
+
+# ---------- signature verification ----------------------------------------------------------------
+class TestSignatureVerification(unittest.TestCase):
+    """The webhook secret is the only thing standing between a stranger and free merchandise."""
+
+    def test_valid_signature_passes(self):
+        payload, header = signed_webhook({"id": "evt_1", "type": "ping"})
+        self.assertTrue(stripe_client.verify_signature(payload, header, TEST_WEBHOOK_SECRET))
+
+    def test_tampered_body_fails(self):
+        payload, header = signed_webhook({"id": "evt_1", "type": "ping", "amount": 100})
+        tampered = payload.replace(b'"amount": 100', b'"amount": 999')
+        with self.assertRaises(stripe_client.SignatureError):
+            stripe_client.verify_signature(tampered, header, TEST_WEBHOOK_SECRET)
+
+    def test_wrong_secret_fails(self):
+        payload, header = signed_webhook({"id": "evt_1", "type": "ping"})
+        with self.assertRaises(stripe_client.SignatureError):
+            stripe_client.verify_signature(payload, header, "whsec_not_the_right_secret")
+
+    def test_replayed_old_signature_fails(self):
+        """A captured webhook must not work an hour later — that is what the timestamp is for."""
+        payload, header = signed_webhook({"id": "evt_1", "type": "ping"},
+                                         timestamp=int(time.time()) - 3600)
+        with self.assertRaises(stripe_client.SignatureError):
+            stripe_client.verify_signature(payload, header, TEST_WEBHOOK_SECRET)
+
+    def test_future_timestamp_fails(self):
+        payload, header = signed_webhook({"id": "evt_1", "type": "ping"},
+                                         timestamp=int(time.time()) + 3600)
+        with self.assertRaises(stripe_client.SignatureError):
+            stripe_client.verify_signature(payload, header, TEST_WEBHOOK_SECRET)
+
+    def test_malformed_headers_fail(self):
+        payload = b'{"id":"evt_1"}'
+        for bad in ("", "garbage", "t=123", "v1=abc", "t=notanumber,v1=abc"):
+            with self.assertRaises(stripe_client.SignatureError):
+                stripe_client.verify_signature(payload, bad, TEST_WEBHOOK_SECRET)
+
+    def test_missing_secret_fails(self):
+        payload, header = signed_webhook({"id": "evt_1", "type": "ping"})
+        with self.assertRaises(stripe_client.SignatureError):
+            stripe_client.verify_signature(payload, header, "")
+
+    def test_rotated_secret_second_signature_accepted(self):
+        """During a rotation Stripe signs with both secrets; either one matching is enough."""
+        payload = json.dumps({"id": "evt_1", "type": "ping"}).encode()
+        ts = str(int(time.time()))
+        old = stripe_client.sign_payload(payload, "whsec_old_secret", ts)
+        new = stripe_client.sign_payload(payload, TEST_WEBHOOK_SECRET, ts)
+        header = f"t={ts},v1={old},v1={new}"
+        self.assertTrue(stripe_client.verify_signature(payload, header, TEST_WEBHOOK_SECRET))
+
+    def test_construct_event_rejects_non_json_and_non_events(self):
+        for body in (b"not json at all", b'{"no":"id or type"}'):
+            payload = body
+            ts = str(int(time.time()))
+            header = f"t={ts},v1={stripe_client.sign_payload(payload, TEST_WEBHOOK_SECRET, ts)}"
+            with self.assertRaises(stripe_client.SignatureError):
+                stripe_client.construct_event(payload, header, TEST_WEBHOOK_SECRET)
+
+
+# ---------- parameter encoding --------------------------------------------------------------------
+class TestParamEncoding(unittest.TestCase):
+    def test_nested_dicts_and_lists(self):
+        pairs = dict(stripe_client.encode_params({
+            "mode": "payment",
+            "metadata": {"order_id": "7"},
+            "line_items": [{"quantity": 2, "price_data": {"unit_amount": 2100}}],
+        }))
+        self.assertEqual(pairs["mode"], "payment")
+        self.assertEqual(pairs["metadata[order_id]"], "7")
+        self.assertEqual(pairs["line_items[0][quantity]"], "2")
+        self.assertEqual(pairs["line_items[0][price_data][unit_amount]"], "2100")
+
+    def test_none_is_omitted_and_bools_lowercase(self):
+        pairs = dict(stripe_client.encode_params({"a": None, "b": True, "c": False}))
+        self.assertNotIn("a", pairs)
+        self.assertEqual(pairs["b"], "true")
+        self.assertEqual(pairs["c"], "false")
+
+
+# ---------- live-mode guard -----------------------------------------------------------------------
+class TestLiveModeGuard(unittest.TestCase):
+    """Real money must never be reachable by accident."""
+
+    def test_key_mode_detection(self):
+        self.assertEqual(stripe_client.key_mode("sk_test_abc"), "test")
+        self.assertEqual(stripe_client.key_mode("sk_live_abc"), "live")
+        self.assertEqual(stripe_client.key_mode("garbage"), "unknown")
+
+    def test_live_key_is_not_configured_without_opt_in(self):
+        cfg = {"secret_key": "sk_live_abc", "webhook_secret": "whsec_x", "publishable_key": "",
+               "public_url": "http://x"}
+        self.assertFalse(stripe_client.is_configured(cfg))
+        self.assertIn("live key refused", stripe_client.config_problem(cfg))
+
+    def test_no_webhook_secret_means_payments_off(self):
+        """A shop that can charge but cannot confirm would take money and never ship."""
+        cfg = {"secret_key": "sk_test_abc", "webhook_secret": "", "publishable_key": "",
+               "public_url": "http://x"}
+        self.assertFalse(stripe_client.is_configured(cfg))
+        self.assertIn("never confirmed", stripe_client.config_problem(cfg))
+
+    def test_redact_never_shows_a_whole_key(self):
+        # Assembled at runtime so no key-shaped literal is ever committed: tools/pre-commit greps
+        # for that pattern and cannot tell a made-up key from a real one. It blocked this very
+        # line when it was written out in full, which is the hook doing its job.
+        fake = "sk_" + "test_" + "abcdefghijklmnop"
+        red = stripe_client.redact(fake)
+        self.assertNotIn("abcdefghijkl", red)
+        self.assertTrue(red.endswith("mnop"))
+        self.assertTrue(red.startswith("test"))
+
+
+# ---------- pricing is the server's, not the browser's ---------------------------------------------
+class TestServerSidePricing(unittest.TestCase):
+    def test_bulk_ladder_is_preserved(self):
+        """9 shirts price at the 5+ tier, 10 at the 10+ tier — unchanged by the Stripe path."""
+        shirts = two_shirt_styles(need=5)
+        conn = db()
+        try:
+            nine = orders.quote(conn, [
+                {"name": shirts[0]["name"], "size": shirts[0]["size"], "qty": 5},
+                {"name": shirts[1]["name"], "size": shirts[1]["size"], "qty": 4},
+            ])
+            ten = orders.quote(conn, [
+                {"name": shirts[0]["name"], "size": shirts[0]["size"], "qty": 5},
+                {"name": shirts[1]["name"], "size": shirts[1]["size"], "qty": 5},
+            ])
+        finally:
+            conn.close()
+        # Pooled across styles: every unit bills at the tier the pooled quantity reached.
+        self.assertTrue(all(ln["unit_cents"] == 2100 for ln in nine["lines"]),
+                        f"9 shirts should be the 5+ tier: {[l['unit_cents'] for l in nine['lines']]}")
+        self.assertTrue(all(ln["unit_cents"] == 1800 for ln in ten["lines"]),
+                        f"10 shirts should be the 10+ tier: {[l['unit_cents'] for l in ten['lines']]}")
+        # The documented price cliff still holds, which proves the ladder was not flattened.
+        self.assertEqual(nine["subtotal_cents"], 18900)
+        self.assertEqual(ten["subtotal_cents"], 18000)
+
+    def test_stripe_is_told_the_servers_price_not_the_browsers(self):
+        """The cart claims $1; Stripe is still told the real ladder price."""
+        shirt = a_shirt(need=5)
+        before = len(stripe_calls)
+        status, out = start_checkout([
+            # Deliberately hostile payload: a price, a tier and a total that are all lies.
+            {"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 5,
+             "price": 0.01, "tier": "retail", "total": 0.05},
+        ])
+        self.assertEqual(status, 200, out)
+        self.assertTrue(out["ok"], out)
+
+        call = stripe_calls[before]
+        self.assertEqual(call["path"], "/checkout/sessions")
+        items = call["params"]["line_items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["price_data"]["unit_amount"], 2100,
+                         "5 shirts must hit the 5+ tier at $21.00, not the browser's $0.01")
+        self.assertEqual(items[0]["quantity"], 5)
+
+        row = order_row(out["ref"])
+        self.assertEqual(row["subtotal_cents"], 10500)
+        self.assertEqual(row["total_cents"], row["subtotal_cents"] + row["shipping_cents"])
+
+    def test_shipping_matches_the_existing_calculation(self):
+        """Shipping is the same weight-tier figure the cart has always shown."""
+        shirt = a_shirt(need=2)
+        before = len(stripe_calls)
+        status, out = start_checkout([
+            {"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 2},
+        ])
+        self.assertEqual(status, 200, out)
+        row = order_row(out["ref"])
+
+        conn = db()
+        try:
+            product = conn.execute("SELECT * FROM products WHERE id=?", (shirt["id"],)).fetchone()
+            expected, oz = orders.shipping_cents([(product, shirt["size"], 2)])
+        finally:
+            conn.close()
+        self.assertEqual(row["shipping_cents"], expected)
+
+        opts = stripe_calls[before]["params"]["shipping_options"]
+        self.assertEqual(opts[0]["shipping_rate_data"]["fixed_amount"]["amount"], expected,
+                         "Stripe must charge the same shipping the cart quoted")
+
+    def test_stripe_total_equals_the_order_total(self):
+        """Line items plus the shipping option must add up to exactly what the DB recorded."""
+        shirt = a_shirt(need=3)
+        before = len(stripe_calls)
+        status, out = start_checkout([
+            {"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 3},
+        ])
+        self.assertEqual(status, 200, out)
+        params = stripe_calls[before]["params"]
+        charged = sum(i["price_data"]["unit_amount"] * i["quantity"] for i in params["line_items"])
+        charged += params["shipping_options"][0]["shipping_rate_data"]["fixed_amount"]["amount"]
+        row = order_row(out["ref"])
+        self.assertEqual(charged, row["total_cents"])
+
+    def test_unknown_product_is_refused(self):
+        status, out = start_checkout([{"name": "Not A Real Product", "size": "M", "qty": 1}])
+        self.assertEqual(status, 409, out)
+        self.assertFalse(out["ok"])
+
+    def test_bad_email_is_refused_before_stripe_is_called(self):
+        shirt = a_shirt()
+        before = len(stripe_calls)
+        status, out = start_checkout(
+            [{"name": shirt["name"], "size": shirt["size"], "qty": 1}], email="not-an-email")
+        self.assertEqual(status, 400, out)
+        self.assertEqual(len(stripe_calls), before, "Stripe must not be called for a bad request")
+
+
+# ---------- stock reservation ----------------------------------------------------------------------
+class TestStockHandling(unittest.TestCase):
+    def test_starting_checkout_reserves_but_does_not_deduct(self):
+        shirt = a_shirt(need=2)
+        phys_before = physical_qty(shirt["id"], shirt["size"])
+        avail_before = available_qty(shirt["id"], shirt["size"])
+
+        status, out = start_checkout([
+            {"name": shirt["name"], "size": shirt["size"], "qty": 2}])
+        self.assertEqual(status, 200, out)
+
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys_before,
+                         "physical stock must not move until payment is confirmed")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), avail_before - 2,
+                         "but the units must be held so nobody else can buy them")
+
+    def test_payment_deducts_stock_once(self):
+        shirt = a_shirt()
+        phys_before = physical_qty(shirt["id"], shirt["size"])
+        status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 1}])
+        self.assertEqual(status, 200, out)
+        row = order_row(out["ref"])
+
+        payload, header = signed_webhook(
+            completed_event(row["payment_ref"], row["order_ref"], row["total_cents"]))
+        code, _ = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+
+        self.assertEqual(order_row(out["ref"])["status"], "paid")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys_before - 1)
+
+    def test_failed_stripe_call_releases_the_reservation(self):
+        """An order holding stock for a payment that can never happen must not sit there."""
+        shirt = a_shirt()
+        avail_before = available_qty(shirt["id"], shirt["size"])
+        original = stripe_client._request
+
+        def boom(*a, **kw):
+            raise stripe_client.StripeError("Stripe is down", {"type": "api_error"})
+
+        stripe_client._request = boom
+        try:
+            status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 1}])
+        finally:
+            stripe_client._request = original
+        self.assertEqual(status, 502, out)
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), avail_before,
+                         "stock must be handed back when the session cannot be created")
+
+
+# ---------- webhook behaviour ------------------------------------------------------------------------
+class TestWebhook(unittest.TestCase):
+    def _pending_order(self, qty=1):
+        shirt = a_shirt(need=qty)
+        status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": qty}])
+        self.assertEqual(status, 200, out)
+        return shirt, order_row(out["ref"])
+
+    def test_unsigned_webhook_is_rejected_and_changes_nothing(self):
+        _, row = self._pending_order()
+        body = json.dumps(completed_event(row["payment_ref"], row["order_ref"],
+                                          row["total_cents"])).encode()
+        code, out = post("/api/stripe/webhook", body, {"Stripe-Signature": ""}, raw=True)
+        self.assertEqual(code, 400)
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending",
+                         "an unsigned webhook must never mark an order paid")
+
+    def test_forged_signature_is_rejected(self):
+        _, row = self._pending_order()
+        event = completed_event(row["payment_ref"], row["order_ref"], row["total_cents"])
+        payload, header = signed_webhook(event, secret="whsec_attacker_guess")
+        code, _ = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 400)
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending")
+
+    def test_amount_mismatch_does_not_mark_paid(self):
+        """Stripe saying a smaller amount was collected must not fulfil the order."""
+        _, row = self._pending_order()
+        event = completed_event(row["payment_ref"], row["order_ref"], 100)  # $1.00
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)          # accepted, so Stripe stops retrying
+        self.assertFalse(out["handled"])     # but deliberately not acted on
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending")
+
+    def test_currency_mismatch_does_not_mark_paid(self):
+        _, row = self._pending_order()
+        event = completed_event(row["payment_ref"], row["order_ref"], row["total_cents"],
+                                currency="eur")
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertFalse(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending")
+
+    def test_unpaid_session_completion_is_ignored(self):
+        """Delayed payment methods complete the session before the money arrives."""
+        _, row = self._pending_order()
+        event = completed_event(row["payment_ref"], row["order_ref"], row["total_cents"],
+                                payment_status="unpaid")
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertFalse(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending")
+
+    def test_replayed_event_does_not_deduct_twice(self):
+        shirt, row = self._pending_order(qty=2)
+        phys_before = physical_qty(shirt["id"], shirt["size"])
+        event = completed_event(row["payment_ref"], row["order_ref"], row["total_cents"],
+                                event_id="evt_replay_fixed_id")
+        payload, header = signed_webhook(event)
+
+        code, _ = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        after_first = physical_qty(shirt["id"], shirt["size"])
+        self.assertEqual(after_first, phys_before - 2)
+
+        # Stripe retries on any non-2xx, and redelivers after an outage. The same event id must be
+        # a no-op the second time.
+        payload2, header2 = signed_webhook(event)
+        code, _ = post("/api/stripe/webhook", payload2, {"Stripe-Signature": header2}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), after_first,
+                         "a redelivered webhook must not deduct stock twice")
+        self.assertEqual(order_row(row["order_ref"])["status"], "paid")
+
+    def test_expired_session_releases_stock(self):
+        shirt, row = self._pending_order()
+        avail_held = available_qty(shirt["id"], shirt["size"])
+        event = {
+            "id": f"evt_expired_{time.time()}", "type": "checkout.session.expired", "livemode": False,
+            "data": {"object": {"id": row["payment_ref"], "client_reference_id": row["order_ref"]}},
+        }
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertTrue(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "cancelled")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), avail_held + 1)
+
+    def test_refund_restores_stock(self):
+        shirt, row = self._pending_order()
+        phys_before = physical_qty(shirt["id"], shirt["size"])
+        pi = f"pi_refund_{int(time.time()*1000)}"
+
+        paid = completed_event(row["payment_ref"], row["order_ref"], row["total_cents"],
+                               payment_intent=pi)
+        payload, header = signed_webhook(paid)
+        post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys_before - 1)
+
+        refund = {
+            "id": f"evt_refund_{time.time()}", "type": "charge.refunded", "livemode": False,
+            "data": {"object": {"id": "ch_test", "payment_intent": pi, "refunded": True}},
+        }
+        payload, header = signed_webhook(refund)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertTrue(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "refunded")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys_before,
+                         "a refund puts the units back on the shelf")
+
+    def test_unknown_event_type_is_accepted_and_ignored(self):
+        event = {"id": f"evt_unknown_{time.time()}", "type": "invoice.created", "livemode": False,
+                 "data": {"object": {"id": "in_test"}}}
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200, "an unhandled type is not a failure — a 500 would be retried forever")
+        self.assertFalse(out["handled"])
+
+    def test_event_for_unknown_order_is_not_an_error(self):
+        event = completed_event("cs_test_does_not_exist", "PO-NOPE", 1000)
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertFalse(out["handled"])
+
+
+# ---------- the return page --------------------------------------------------------------------------
+class TestCheckoutStatus(unittest.TestCase):
+    def test_status_reflects_the_database_not_the_url(self):
+        """Typing ?checkout=success proves nothing; the status endpoint reads the order."""
+        shirt = a_shirt()
+        status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 1}])
+        self.assertEqual(status, 200, out)
+        ref = out["ref"]
+
+        code, state = get(f"/api/checkout/status?ref={ref}")
+        self.assertEqual(code, 200)
+        self.assertFalse(state["paid"], "an unpaid order must not report as paid")
+        self.assertEqual(state["status"], "pending")
+
+        row = order_row(ref)
+        payload, header = signed_webhook(
+            completed_event(row["payment_ref"], ref, row["total_cents"]))
+        post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+
+        code, state = get(f"/api/checkout/status?ref={ref}")
+        self.assertTrue(state["paid"])
+        self.assertEqual(state["status"], "paid")
+
+    def test_unknown_ref_is_404(self):
+        code, _ = get("/api/checkout/status?ref=PO-DOESNOTEXIST")
+        self.assertEqual(code, 404)
+
+    def test_status_does_not_leak_customer_details(self):
+        shirt = a_shirt()
+        _, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 1}])
+        _, state = get(f"/api/checkout/status?ref={out['ref']}")
+        for leaky in ("email", "ship_name", "ship_address1", "items"):
+            self.assertNotIn(leaky, state)
+
+    def test_payments_config_exposes_no_keys(self):
+        code, cfg = get("/api/payments/config")
+        self.assertEqual(code, 200)
+        self.assertTrue(cfg["payments_enabled"])
+        self.assertEqual(cfg["mode"], "test")
+        body = json.dumps(cfg)
+        self.assertNotIn("sk_test", body)
+        self.assertNotIn("whsec", body)
+
+
+# ---------- the secret file is not served ------------------------------------------------------------
+class TestPrivateFiles(unittest.TestCase):
+    def test_stripe_config_is_404(self):
+        for path in ("/stripe_config.json", "/costs.json", "/admin_auth.json"):
+            try:
+                with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as r:
+                    self.fail(f"{path} was served with {r.status}")
+            except urllib.error.HTTPError as e:
+                self.assertEqual(e.code, 404, path)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

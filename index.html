@@ -14,7 +14,7 @@
      are parsed. -->
 <link rel="icon" href="images/favicon.png" type="image/png" />
 <link rel="stylesheet" href="fonts/fonts.css?v=1" />
-<link rel="stylesheet" href="styles.css?v=60" />
+<link rel="stylesheet" href="styles.css?v=61" />
 </head>
 <body>
 
@@ -273,7 +273,7 @@
     <button type="button" class="modal-close" id="checkout-close" aria-label="Close">&times;</button>
 
     <div class="checkout-body" id="checkout-form-view">
-      <p class="eyebrow">Reserve Your Order</p>
+      <p class="eyebrow" id="checkout-eyebrow">Reserve Your Order</p>
       <h3>Lock In Your Pieces</h3>
 
       <div class="checkout-items" id="checkout-items">
@@ -298,8 +298,8 @@
       <!-- Claims here have to be things the page actually does. "Encrypted checkout" was not one:
            no payment is taken and no card data is in flight, so there is nothing being encrypted
            beyond ordinary HTTPS — and over the dev server's plain http:// not even that. -->
-      <ul class="checkout-trust">
-        <li>No card details collected</li>
+      <ul class="checkout-trust" id="checkout-trust">
+        <li id="checkout-trust-card">No card details collected</li>
         <li>Ships within 48hrs</li>
         <li>DM-verified seller</li>
       </ul>
@@ -308,7 +308,7 @@
            card details into inputs that discard them is the one genuinely unsafe thing this site
            could do: a real buyer types a real card number and it lands in their browser history
            and autofill for nothing. Reserving the order is honest and works today. -->
-      <div class="checkout-notice">
+      <div class="checkout-notice" id="checkout-notice">
         <strong>Card payment isn&rsquo;t live yet.</strong>
         Place the order below and it&rsquo;s held in your name for 30 minutes &mdash; then DM
         <a href="https://instagram.com/paidoffclothes" target="_blank" rel="noopener">@paidoffclothes</a>
@@ -360,7 +360,7 @@
         <button type="submit" class="btn btn-primary checkout-pay-btn tilt" data-tilt-max="6" id="checkout-pay-btn">
           <span id="checkout-pay-label">Reserve <span id="checkout-pay-amount"></span></span>
         </button>
-        <p class="checkout-disclaimer">No payment is taken here and no card details are collected. Your items are held for 30 minutes.</p>
+        <p class="checkout-disclaimer" id="checkout-disclaimer">No payment is taken here and no card details are collected. Your items are held for 30 minutes.</p>
       </form>
     </div>
 
@@ -444,7 +444,7 @@
 
 
 
-<script src="script.js?v=60"></script>
+<script src="script.js?v=61"></script>
 </body>
 </html>
 

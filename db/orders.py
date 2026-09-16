@@ -463,3 +463,82 @@ def set_status(conn, order_id, new_status, note=""):
         except Exception:
             conn.rollback()
             raise
+
+
+# ---- payment provider linkage ------------------------------------------------------------------
+# A webhook arrives knowing Stripe's ids and nothing else, so these are the lookups that turn a
+# cs_.../pi_... back into one of our orders. Deliberately narrow: they resolve identity, they never
+# move money or stock. Every state change still goes through mark_paid / cancel_order /
+# refund_order, so there is exactly one place where each transition is implemented.
+def attach_payment(conn, order_id, provider, payment_ref, mode="", payment_intent=None):
+    """Record which provider object is paying for this order.
+
+    Called right after the Checkout Session is created, so that if the buyer pays and the webhook
+    lands before the browser comes back, the event can still find its order.
+    """
+    with _lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("""UPDATE orders SET payment_provider=?, payment_ref=?, payment_mode=?,
+                            payment_intent=COALESCE(?, payment_intent), updated_at=?
+                            WHERE id=?""",
+                         (provider, payment_ref, mode, payment_intent, time.time(), order_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def set_payment_intent(conn, order_id, payment_intent):
+    """A session only names its PaymentIntent once payment is under way; a refund names only that.
+
+    Returns True if it was stored. Deliberately NON-FATAL: this id only exists so a later refund
+    event can find the order, and the unique index on it can reject a write (the same intent
+    already recorded against a different order — an anomaly, but not this payment's problem).
+    Letting that raise would abort the webhook handler before mark_paid ran, so Stripe would retry
+    a payment that already succeeded and the order would never be marked paid. Money arriving
+    matters more than an index being tidy, so the failure is logged and swallowed.
+    """
+    if not payment_intent:
+        return False
+    with _lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("UPDATE orders SET payment_intent=?, updated_at=? WHERE id=?",
+                         (payment_intent, time.time(), order_id))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            print(f"[orders] payment_intent {payment_intent} already belongs to another order; "
+                  f"not attaching it to order {order_id}")
+            return False
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def order_by_payment_ref(conn, payment_ref):
+    return conn.execute("SELECT * FROM orders WHERE payment_ref=?", (payment_ref,)).fetchone()
+
+
+def order_by_payment_intent(conn, payment_intent):
+    return conn.execute("SELECT * FROM orders WHERE payment_intent=?", (payment_intent,)).fetchone()
+
+
+def order_by_ref(conn, order_ref):
+    return conn.execute("SELECT * FROM orders WHERE order_ref=?", (order_ref,)).fetchone()
+
+
+def amount_matches(order_row, amount_cents, currency="usd"):
+    """Does what the provider says it collected match what we priced?
+
+    The gate that makes server-side pricing mean something. Stripe is told the amount by us, so a
+    mismatch means either tampering or a bug — in both cases the order must NOT be marked paid off
+    the back of that event.
+    """
+    if amount_cents is None:
+        return False
+    if (order_row["currency"] or "USD").lower() != (currency or "usd").lower():
+        return False
+    return int(amount_cents) == int(order_row["total_cents"])

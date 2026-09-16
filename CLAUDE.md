@@ -16,6 +16,9 @@ Static site, no build step, no dependencies. At the repo root:
 - `fonts/` — self-hosted woff2 + `fonts.css`; `images/` — product photos
 - [styles.css](styles.css) — all styling, dark theme, CSS custom properties in `:root`
 - [server.py](server.py) — stdlib-only dev server + tiny JSON API
+- [stripe_client.py](stripe_client.py) — Stripe Checkout over urllib; no SDK, no dependency
+- [STRIPE.md](STRIPE.md) — payment setup, the manual test script, and the go-live checklist
+- `tests/` — stdlib `unittest`; `python3 tests/test_stripe_checkout.py` needs no credentials
 
 ## Running it
 
@@ -138,12 +141,63 @@ is authentic and that receipts are provided to buyers after purchase.
 | Footer / vouches | `initVouchFooter` | The site has exactly **one** footer, fixed to the bottom of the viewport, and it *is* the vouch rotator: one buyer quote at a time, swapped every `VOUCH_ROTATE_MS` (4s), with the brand/copyright line beneath. Quotes come verbatim from the Instagram reference post (`VOUCH_POST_URL`) — **never reword one**, since they are other people's words and editing turns a real quote into a fabricated one. Handles are stored **already masked** in `VOUCHES`: masking only at render would still ship the real usernames in the page source, which is not anonymity. The originals are on the public post. Rotation pauses on hover and while the tab is hidden; `body` carries a `padding-bottom` matching the footer height so content never runs underneath it. |
 | Newsletter signup | `initSignup` | Optional `#signup` section near the foot of the page, posting to `/api/subscribe`. **Nothing is gated behind it** — browsing, pricing, cart and checkout all work without it, and a failed POST just says so rather than blocking. Was a full-screen overlay at z-index 1000 that held the store hostage until an email was handed over; the email is now asked for once at checkout, where it is actually needed to send a confirmation. |
 | Cart | `loadCart` / `saveCart` | `localStorage["poc_cart"]` stores `[{name, size, qty}]`; a *line* is a product + chosen size + quantity, keyed by `lineId` (`name__size`), so two sizes of one style are two lines. `addToCart` tops up an existing line rather than refusing it, returning `"added"` / `"topped-up"` / `"maxed"`. The badge counts units, not lines. `loadCart` drops lines whose style or size has since left `PRODUCTS`. |
-| Checkout | `initCheckout` | **Reserves stock; no payment processor connected.** There are **no card fields at all** — the inputs and their card-number/expiry/CVC formatters were removed, because formatting a card number implies the site does something with it and it did not. The panel says so to the buyer ("Card payment isn't live yet"): the order is held 30 minutes and settled by DM. Only email/items/subtotal/shipping/total/weight/`ship_to` are POSTed. |
+| Checkout | `initCheckout` / `startStripeCheckout` | **Two flows, chosen by the server.** With Stripe configured the button reads *Pay $X* and hands off to Stripe's hosted page; without it, the original reserve-and-DM flow. There are **no card fields either way** — hosted Checkout means card details never touch this site. Only email/items/`ship_to` are POSTed; every price is recomputed server-side. See the Payments section below. |
 | My Orders | `initOrders` | Email lookup, no accounts |
 | 3D tilt | `initTilt` | Any element with `class="tilt"` and optional `data-tilt-max` |
 
 `initTilt()` must be re-called after injecting new `.tilt` markup (`renderProducts` already does).
 Everything is wired up from a single `DOMContentLoaded` handler at the bottom of the file.
+
+## Payments (Stripe Checkout)
+
+**Test mode only, and not deployed.** Full setup, the manual test script and the go-live checklist
+are in [STRIPE.md](STRIPE.md); this is the part a future change has to not break.
+
+`stripe_client.py` talks to Stripe's REST API with `urllib` rather than the `stripe` SDK, so the
+project keeps its zero-dependency promise. Form encoding, bracket notation for nested params and
+webhook signatures are all implemented there.
+
+**Payments are off unless a secret key AND a webhook secret are both present.** A half-configured
+install falls back to the reserve flow, deliberately: an order that can be paid but never confirmed
+is worse than one that cannot be paid at all, because the buyer is charged and the shop never
+ships. `is_configured()` is the single source of that answer, and `/api/payments/config` is how the
+front end learns it.
+
+**A live key is refused unless `POC_ALLOW_LIVE_PAYMENTS=1`.** Pasting a `sk_live_` key is not
+enough to start taking real money; someone has to set that variable on the server too. Keys are
+never logged whole — `redact()` shows the mode and the last four characters.
+
+Three rules the payment path depends on:
+
+- **The browser never sends a price.** `/api/checkout/session` accepts `name`/`size`/`qty` and
+  nothing else that touches money. `orders.create_order()` prices the basket from the database
+  ladder and the Checkout Session is built from *those* figures, so a tampered cart changes what is
+  ordered, never what it costs. There is a test that posts `price: 0.01` and asserts Stripe is
+  still told $21.00.
+- **The webhook marks an order paid, not the success page.** The buyer's return to
+  `?checkout=success` is cosmetic; `initCheckoutReturn()` asks `/api/checkout/status`, which reads
+  the order's real state. Typing that URL by hand proves nothing.
+- **A payment is only honoured when the amount matches.** `orders.amount_matches()` compares
+  `amount_total` and currency against the order before `mark_paid` runs. A mismatch is logged
+  loudly and the order is left pending — never fulfilled on the strength of the event alone.
+
+Idempotency is not reimplemented here: `payment_events` already keys on the provider's event id, so
+a redelivered webhook fails that insert and becomes a no-op inside `mark_paid` / `cancel_order` /
+`refund_order`. Stripe redelivers after any non-2xx and after an outage, so this matters — there is
+a test that replays an event and asserts stock does not move twice.
+
+**An unhandled event type returns 200, not an error.** A non-2xx makes Stripe retry for days.
+Genuine handler faults do return 500, because those *should* be retried.
+
+`set_payment_intent()` is deliberately non-fatal. It only stores the id a later refund event needs;
+letting its unique-index violation raise would abort the handler before `mark_paid` ran, so Stripe
+would retry a payment that already succeeded and the order would never be marked paid. Money
+arriving matters more than an index being tidy.
+
+Copy moves with the flow. `applyPaymentCopy()` swaps the eyebrow, the notice, the trust-strip line,
+the button and the disclaimer together, because every one of them makes a promise that is false in
+the other mode — "no card details are collected" while Stripe collects them is the same kind of
+untrue claim that got "Encrypted checkout" removed. In test mode the panel says so in bold.
 
 ## Pricing
 
@@ -410,6 +464,9 @@ without it, `orders.json` hands customer names, emails and shipping addresses to
 the URL. **Any new file holding customer data must be added to that set.** Reach order data through
 `/api/orders` (scoped to one email) or `/api/labels.csv`.
 
+`stripe_config.json` is in that set too. The webhook signing secret in it is as dangerous as the
+API key: anyone holding it can forge a "payment succeeded" event and have the shop ship for free.
+
 ## API (server.py)
 
 All responses are JSON; all writes are guarded by one global lock and persisted to gitignored JSON
@@ -421,17 +478,31 @@ files in the repo root (`clicks.json`, `bids.json`, `orders.json`, `subscribers.
 - `GET  /api/orders?email=` / `POST /api/order` — `{email, items, subtotal, shipping, total, weight_oz, ship_to}`, where `ship_to` is `{name, address1, address2, city, state, zip, country}` split into separate fields so the label CSV can map them
 - `GET  /api/labels.csv[?unshipped=1]` — Pirate Ship bulk-upload spreadsheet
 - `POST /api/subscribe` — `{email}`, newsletter signups from the `#signup` section
+- `GET  /api/payments/config` — `{payments_enabled, mode}`; one bit and a mode, never a key
+- `POST /api/checkout/session` — `{email, ship_to, items:[{name,size,qty}]}` → a Stripe Checkout URL
+- `POST /api/stripe/webhook` — signature-verified payment events; **this is what marks an order paid**
+- `GET  /api/checkout/status?ref=` — order state for the return page, read from the database
 
 This is a dev-grade backend: flat files, no auth, no validation beyond the basics, single process.
 Anything real (payments, an admin view, sending mail) needs a proper backend behind it.
 
 ## Known TODOs
 
-- Payments: no processor is connected, so checkout **reserves** rather than charges — held 30
-  minutes, settled by DM. The card inputs are already gone, so nothing collects card data today;
-  keep it that way until Stripe (or similar) is actually wired up, and don't build a homegrown
-  card-handling path. Claims in the checkout trust strip must stay things the page really does —
-  "Encrypted checkout" was removed for that reason.
+- **Payments: Stripe Checkout is wired up in test mode and NOT deployed.** What is left is the
+  owner's call, not code: supply live keys, set `POC_ALLOW_LIVE_PAYMENTS=1`, register the webhook
+  endpoint on the real domain, and approve a deploy. See [STRIPE.md](STRIPE.md). Without keys the
+  site still runs the reserve-and-DM flow, and there are still no card fields anywhere — hosted
+  Checkout is what keeps it that way. Claims in the checkout copy must stay things the page really
+  does; `applyPaymentCopy()` swaps every one of them with the flow.
+- **Shipping weights are keyed on category names that no longer exist.** `CATEGORY_WEIGHT_OZ` in
+  [script.js](script.js) (mirrored in `db/orders.py`) still says `"T-Shirts"` and `"Backpacks"`,
+  but the rename in `ff30d32` made those categories `Shirts` and `Bags`. Both lookups miss and fall
+  through to `DEFAULT_WEIGHT_OZ` (8 oz), so a shirt bills at 8 oz instead of 7 — trivial — and **a
+  bag bills at 8 oz instead of 32**, which is a real postage loss on every bag sold. `Belts` and
+  `Shoes` still match and are unaffected. Not fixed here on purpose: the Stripe work was explicitly
+  scoped to preserve the existing shipping calculation, and correcting this changes what buyers are
+  quoted. `test_pricing_parity` did not catch it because JS and Python carry the *same* stale keys
+  — parity is not correctness. Fix it before taking real money.
 - Resend: `/api/subscribe` has a TODO for the welcome email and drop announcements; account/API key
   not set up yet.
 - **Photo quality and provenance.** The workbook shots max out at ~420px, which is soft for a
@@ -473,10 +544,18 @@ disabled button alone does not.
   those lines the delete failed with "unknown productId", an error the owner cannot act on. The
   confirm dialog now names the affected shipments, and a failed publish restores them.
 
+- **The webhook verifies signatures and amounts before anything moves.** Either check failing means
+  the order stays pending: an unsigned or forged event is a 400, and an amount or currency that
+  does not match the order is accepted with a 200 (so Stripe stops retrying) but deliberately not
+  acted on. Removing either check turns "someone can POST JSON at your server" into "someone can
+  order free merchandise".
+
 **The pre-commit hook needs updating whenever a new secret file is introduced.** It is a fixed list
 of filenames, not a rule: `costs.json` was added to the repo and the hook happily committed it
 until the pattern was extended. Anything new that holds credentials or business data goes in
-`tools/pre-commit`, `.gitignore` and `PRIVATE_FILES` together.
+`tools/pre-commit`, `.gitignore` and `PRIVATE_FILES` together. `stripe_config.json` was added to
+all three when Stripe went in, and the hook also greps for a bare `sk_`/`whsec_` string pasted into
+any tracked file.
 
 **Cross-platform:** every path goes through `os.path.join`, there are no shell-outs and no absolute
 paths, so the server runs unchanged on Windows. One caveat: `os.chmod(..., 0o600)` on

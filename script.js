@@ -1199,7 +1199,7 @@ function openCheckout(items) {
 
   const payBtn = document.getElementById("checkout-pay-btn");
   payBtn.disabled = false;
-  document.getElementById("checkout-pay-label").innerHTML = `Reserve <span id="checkout-pay-amount">${money(total)}</span>`;
+  applyPaymentCopy(total);
 
   document.getElementById("checkout-overlay").hidden = false;
   syncBodyScroll();
@@ -1281,6 +1281,173 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
     });
 }
 
+// ---------- stripe checkout ----------
+// Hosted Checkout: the buyer leaves for Stripe's page and comes back. Card details never touch
+// this site, which is why no card fields were ever added back to the form.
+//
+// Payments are OFF unless the server says otherwise, and the server only says so when it has both
+// an API key and a webhook secret. So a fresh clone, a `file://` page, or a half-configured
+// install all fall back to the reserve flow rather than offering a button that cannot work.
+const PAYMENTS = { enabled: false, mode: "off" };
+
+// Which cart lines a redirect is paying for, so coming back successful clears exactly those and
+// not a piece added in another tab while Stripe had the buyer.
+const PENDING_CHECKOUT_KEY = "poc_pending_checkout";
+
+async function loadPaymentsConfig() {
+  try {
+    const res = await fetch("/api/payments/config");
+    const data = await res.json();
+    PAYMENTS.enabled = !!data.payments_enabled;
+    PAYMENTS.mode = data.mode || "off";
+  } catch (err) {
+    // file://, or the server is down. Either way: no card payment, no error shown to the visitor.
+    PAYMENTS.enabled = false;
+    PAYMENTS.mode = "off";
+  }
+}
+
+// The reserve flow and the card flow make different promises, so the panel's copy has to move with
+// them. Leaving "no card details collected" up while Stripe collects card details would be exactly
+// the kind of claim that got "Encrypted checkout" removed.
+function applyPaymentCopy(total) {
+  const notice = document.getElementById("checkout-notice");
+  const trustCard = document.getElementById("checkout-trust-card");
+  const payLabel = document.getElementById("checkout-pay-label");
+  const eyebrow = document.getElementById("checkout-eyebrow");
+  const disclaimer = document.getElementById("checkout-disclaimer");
+
+  if (!PAYMENTS.enabled) {
+    payLabel.innerHTML = `Reserve <span id="checkout-pay-amount">${money(total)}</span>`;
+    return;
+  }
+
+  payLabel.innerHTML = `Pay <span id="checkout-pay-amount">${money(total)}</span>`;
+  if (trustCard) trustCard.textContent = "Card details go straight to Stripe";
+  if (eyebrow) eyebrow.textContent = "Card Payment";
+  // The reserve flow's fine print says no payment is taken — true then, false the moment Stripe is
+  // taking one. Every line that makes a promise has to move with the flow, not just the button.
+  if (disclaimer) {
+    disclaimer.textContent =
+      PAYMENTS.mode === "test"
+        ? "Stripe test mode: no card is charged and no money moves. Your items are held for 30 minutes."
+        : "Payment is processed by Stripe. Your items are held for 30 minutes while you pay.";
+  }
+  if (notice) {
+    // In test mode this says so in the loudest place on the panel. A test charge that looks like a
+    // real one is how someone ends up believing they have been paid.
+    notice.innerHTML =
+      PAYMENTS.mode === "test"
+        ? "<strong>Test mode — no real money moves.</strong> This checkout is wired to Stripe's test " +
+          "environment. Use card 4242 4242 4242 4242, any future expiry and any CVC. A real card will be declined."
+        : "<strong>Payment is handled by Stripe.</strong> You'll be sent to Stripe's secure checkout " +
+          "page to pay, then brought back here. Your card details never touch this site.";
+  }
+}
+
+// Server-side pricing is the whole point: this posts name/size/qty and nothing else. The order is
+// priced, stock-checked and reserved by the server, and the Stripe session is built from those
+// figures — so what the card is charged is what the shop computed, not what the page displayed.
+function startStripeCheckout(labelEl, email, ship_to) {
+  labelEl.textContent = "Taking you to Stripe...";
+  const items = checkoutItems;
+
+  fetch("/api/checkout/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email,
+      ship_to,
+      idempotency_key: checkoutKey,
+      items: items.map((l) => ({ id: l.id, name: fullName(l), size: l.size, qty: l.qty })),
+    }),
+  })
+    .then((res) => res.json().then((out) => ({ ok: res.ok && out.ok, out })))
+    .then(({ ok, out }) => {
+      if (!ok || !out.url) {
+        labelEl.textContent = "Try again";
+        document.getElementById("checkout-pay-btn").disabled = false;
+        showCheckoutError(out.error || "Could not start the payment. Nothing has been charged.");
+        return;
+      }
+      // Recorded before leaving: the browser may not come back for minutes, or at all.
+      try {
+        localStorage.setItem(PENDING_CHECKOUT_KEY, JSON.stringify({
+          ref: out.ref, lineIds: items.map((l) => l.lineId),
+        }));
+      } catch (err) { /* private mode — the cart just won't self-clear */ }
+      window.location.href = out.url;
+    })
+    .catch(() => {
+      labelEl.textContent = "Try again";
+      document.getElementById("checkout-pay-btn").disabled = false;
+      showCheckoutError("Could not reach the server. Nothing has been charged.");
+    });
+}
+
+// Coming back from Stripe. The query string is NOT evidence of anything — anyone can type
+// ?checkout=success — so the order's real status is read from the server before a word is shown.
+async function initCheckoutReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get("checkout");
+  if (!outcome) return;
+
+  const ref = (params.get("ref") || "").trim();
+  // Clean the URL either way, so a refresh doesn't replay this and the ref doesn't linger in the
+  // address bar to be copied into a screenshot.
+  window.history.replaceState({}, "", window.location.pathname);
+
+  let pending = null;
+  try {
+    pending = JSON.parse(localStorage.getItem(PENDING_CHECKOUT_KEY) || "null");
+  } catch (err) { /* ignore */ }
+  try {
+    localStorage.removeItem(PENDING_CHECKOUT_KEY);
+  } catch (err) { /* ignore */ }
+
+  // Reuses the panel's existing alert view rather than inventing a toast: same two elements the
+  // reserve flow writes into, same Done button.
+  const showAlert = (titleText, descText) => {
+    document.getElementById("payment-alert-title").textContent = titleText;
+    document.getElementById("payment-alert-desc").textContent = descText;
+    document.getElementById("checkout-form-view").hidden = true;
+    document.getElementById("checkout-success-view").hidden = false;
+    document.getElementById("checkout-overlay").hidden = false;
+    syncBodyScroll();
+  };
+
+  if (outcome === "cancelled") {
+    // Stock is released by the webhook on checkout.session.expired, or by the reservation TTL.
+    // The cart is deliberately left exactly as it was so the buyer can simply try again.
+    showAlert("Payment cancelled", "Nothing was charged and your cart is still here.");
+    return;
+  }
+  if (outcome !== "success" || !ref) return;
+
+  let state = null;
+  try {
+    const res = await fetch(`/api/checkout/status?ref=${encodeURIComponent(ref)}`);
+    state = await res.json();
+  } catch (err) { /* handled below */ }
+
+  if (state && state.ok && state.paid) {
+    if (pending && Array.isArray(pending.lineIds)) pending.lineIds.forEach((id) => removeFromCart(id));
+    showAlert(
+      PAYMENTS.mode === "test" ? "Test payment complete" : "Payment received",
+      `Order ${ref} is paid${PAYMENTS.mode === "test" ? " (test mode — no real money moved)" : ""}. ` +
+        "A confirmation follows once shipping is arranged."
+    );
+  } else {
+    // Stripe redirected but our webhook has not landed yet. Saying "paid" here would be guessing,
+    // and the cart is left alone until the server agrees the money arrived.
+    showAlert(
+      "Payment is confirming",
+      `Order ${ref} was submitted and is waiting on confirmation from Stripe. ` +
+        "Check My Orders in a moment — nothing further is needed from you."
+    );
+  }
+}
+
 // One key per checkout attempt, so a double-click or a retried request cannot create two orders.
 let checkoutKey = null;
 
@@ -1311,6 +1478,21 @@ function initCheckout() {
     const email = document.getElementById("co-email").value;
     payBtn.disabled = true;
     const label = checkoutItems.length > 1 ? `Your ${checkoutItems.length} items are` : `${checkoutItems[0].name} is`;
+    const val = (id) => document.getElementById(id).value.trim();
+
+    if (PAYMENTS.enabled) {
+      startStripeCheckout(document.getElementById("checkout-pay-label"), email, {
+        name: val("co-ship-name"),
+        address1: val("co-address1"),
+        address2: val("co-address2"),
+        city: val("co-city"),
+        state: val("co-state").toUpperCase(),
+        zip: val("co-zip"),
+        country: "US",
+      });
+      return;
+    }
+
     completeCheckout(
       document.getElementById("checkout-pay-label"),
       "Reservation",   // `method` is now only used for the order record, not the headline
@@ -1876,11 +2058,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   initModal();
   initLightbox();
   initCheckout();
+  // Before initCheckoutReturn, which needs to know whether this build takes cards at all.
+  await loadPaymentsConfig();
   initCart();
   initOrders();
   initControls();
   initSocialToggle();
   initTilt();
+  // Last: the cart must be loaded before a paid return can clear the lines it paid for.
+  initCheckoutReturn();
 });
 
 

@@ -47,6 +47,13 @@ _orders_spec.loader.exec_module(orders)
 _mig_spec = _ilu.spec_from_file_location("_migrate", os.path.join(APP_DIR, "db", "migrate.py"))
 _migrate = _ilu.module_from_spec(_mig_spec)
 _mig_spec.loader.exec_module(_migrate)
+
+# Stripe Checkout. Stdlib-only client (no `stripe` SDK), so the project keeps its zero-dependency
+# promise. Payments stay OFF unless a key and a webhook secret are both configured — see
+# stripe_client.is_configured() for why a half-configured install must not take money.
+_stripe_spec = _ilu.spec_from_file_location("_stripe", os.path.join(APP_DIR, "stripe_client.py"))
+stripe_client = _ilu.module_from_spec(_stripe_spec)
+_stripe_spec.loader.exec_module(stripe_client)
 CLICKS_FILE = os.path.join(DIR, "clicks.json")
 BIDS_FILE = os.path.join(DIR, "bids.json")
 ORDERS_FILE = os.path.join(DIR, "orders.json")
@@ -72,6 +79,9 @@ PRIVATE_FILES = {
     # The admin token. Serving this would hand out write access to the catalog.
     "admin_token.txt",
     "admin_auth.json",
+    # Stripe secret key and webhook signing secret. Serving this would let anyone charge cards as
+    # the shop and forge payment confirmations.
+    "stripe_config.json",
     # Supplier costs and landed cost. products.json is fetched by every visitor; this must never
     # be, or the storefront would hand out the margin on every item.
     "costs.json",
@@ -682,6 +692,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        # Whether the storefront should offer card payment at all. Public and deliberately thin:
+        # one boolean and the mode, never a key or a reason.
+        if path == "/api/payments/config":
+            cfg = stripe_client.load_config()
+            enabled = stripe_client.is_configured(cfg)
+            self._send_json({
+                "ok": True,
+                "payments_enabled": enabled,
+                "mode": stripe_client.key_mode(cfg["secret_key"]) if enabled else "off",
+            })
+            return
+
+        # The return page asks the DATABASE whether the order is paid — it never trusts the query
+        # string Stripe redirected with. Typing ?checkout=success by hand proves nothing.
+        if path == "/api/checkout/status":
+            ref = (parse_qs(urlsplit(self.path).query).get("ref") or [""])[0].strip()
+            if not ref:
+                self._send_json({"ok": False, "error": "Missing ref."}, status=400)
+                return
+            conn = store.connect()
+            try:
+                row = orders.order_by_ref(conn, ref)
+            finally:
+                conn.close()
+            if row is None:
+                self._send_json({"ok": False, "error": "Unknown order."}, status=404)
+                return
+            # Minimal by design: the order_ref is the only secret the buyer holds, so this returns
+            # what a receipt needs and nothing that would matter if the ref were guessed.
+            self._send_json({
+                "ok": True, "ref": row["order_ref"], "status": row["status"],
+                "paid": row["status"] in ("paid", "fulfilled"),
+                "total": (row["total_cents"] or 0) / 100,
+            })
+            return
+
         if path == "/api/orders":
             email = (query.get("email") or [""])[0].strip().lower()
             ref = (query.get("ref") or [""])[0].strip().upper()
@@ -914,6 +960,148 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({"ok": True, "current": current_bid})
             return
 
+        # ---- Stripe Checkout ------------------------------------------------------------------
+        # The browser never sends a price. It sends name/size/qty, the order is created and priced
+        # by db/orders.py exactly as the reserve flow does, and the Checkout Session is built from
+        # THOSE figures. Stripe is told what to charge by the server, so a tampered cart can change
+        # what is ordered but never what it costs.
+        if self.path == "/api/checkout/session":
+            cfg = stripe_client.load_config()
+            if not stripe_client.is_configured(cfg):
+                # Deliberately vague to the buyer, specific in the log: the reason names key state.
+                print(f"[stripe] checkout refused — {stripe_client.config_problem(cfg)}")
+                self._send_json({"ok": False, "error": "Card payment isn't available right now.",
+                                 "payments_enabled": False}, status=503)
+                return
+
+            payload = self._read_json()
+            email = str(payload.get("email", "")).strip().lower() if isinstance(payload, dict) else ""
+            items = payload.get("items") if isinstance(payload, dict) else None
+            ship_to = payload.get("ship_to") if isinstance(payload, dict) else None
+            if not isinstance(ship_to, dict):
+                ship_to = {}
+            if not EMAIL_RE.match(email or ""):
+                self._send_json({"ok": False, "error": "A valid email is required."}, status=400)
+                return
+            if not isinstance(items, list) or not items:
+                self._send_json({"ok": False, "error": "Your cart is empty."}, status=400)
+                return
+
+            requested = [{"id": it.get("id"), "name": it.get("name"),
+                          "size": it.get("size"), "qty": it.get("qty")}
+                         for it in items if isinstance(it, dict)]
+            key = str(payload.get("idempotency_key") or "").strip() or None
+
+            conn = store.connect()
+            try:
+                orders.sweep_if_due(conn)
+                try:
+                    result = orders.create_order(conn, email, requested, ship_to, idempotency_key=key)
+                except orders.OrderError as first:
+                    # Same retry-after-sweep rule as /api/order: only stock failures are worth a
+                    # second look, and only once an expired hold has actually been released.
+                    if not first.detail.get("stock"):
+                        raise
+                    if not orders.expire_pending(conn):
+                        raise
+                    result = orders.create_order(conn, email, requested, ship_to, idempotency_key=key)
+
+                order_row = orders.order_by_ref(conn, result["order_ref"])
+
+                # A duplicate submit must not create a second Stripe session for the same order.
+                if result.get("duplicate") and order_row and order_row["payment_ref"]:
+                    try:
+                        existing = stripe_client.api_get(
+                            f"/checkout/sessions/{order_row['payment_ref']}")
+                        if existing.get("status") == "open" and existing.get("url"):
+                            self._send_json({"ok": True, "url": existing["url"],
+                                             "ref": order_row["order_ref"], "duplicate": True})
+                            return
+                    except stripe_client.StripeError:
+                        pass    # fall through and make a fresh one
+
+                lines = result.get("lines") or []
+                base = cfg["public_url"]
+                try:
+                    session = stripe_client.create_checkout_session(
+                        {"order_id": result["order_id"], "order_ref": result["order_ref"],
+                         "shipping_cents": result.get("shipping_cents", 0)},
+                        lines,
+                        success_url=f"{base}/?checkout=success&ref={result['order_ref']}",
+                        cancel_url=f"{base}/?checkout=cancelled&ref={result['order_ref']}",
+                        email=email,
+                        # Keyed on the order, so a retried POST reuses Stripe's first answer
+                        # instead of opening a second session against the same reserved stock.
+                        idempotency_key=f"poc-session-{result['order_ref']}",
+                    )
+                except stripe_client.StripeError as e:
+                    # The order is holding stock for a payment that can now never happen. Release
+                    # it rather than leaving inventory locked up by a failed API call.
+                    try:
+                        orders.cancel_order(conn, result["order_id"],
+                                            reason=f"stripe session failed: {e.message}",
+                                            status="failed")
+                    except Exception:
+                        pass
+                    print(f"[stripe] create session failed: {e.message} {e.detail}")
+                    self._send_json({"ok": False,
+                                     "error": "Could not start the payment. Nothing was charged."},
+                                    status=502)
+                    return
+
+                orders.attach_payment(conn, result["order_id"], "stripe", session.get("id"),
+                                      mode=stripe_client.key_mode(cfg["secret_key"]),
+                                      payment_intent=session.get("payment_intent"))
+            except orders.OrderError as e:
+                self._send_json({"ok": False, "error": e.message, **e.detail}, status=409)
+                return
+            except Exception as e:
+                print(f"[stripe] checkout error: {e}")
+                self._send_json({"ok": False, "error": "Could not start the payment."}, status=500)
+                return
+            finally:
+                conn.close()
+
+            store.project_orders()
+            self._send_json({"ok": True, "url": session.get("url"), "ref": result["order_ref"],
+                             "session_id": session.get("id"),
+                             "total": (result.get("total_cents") or 0) / 100})
+            return
+
+        # Payment confirmation. This — not the buyer's browser coming back to the success page —
+        # is what marks an order paid. A shopper who closes the tab still gets their order; a
+        # shopper who hand-types the success URL does not.
+        if self.path == "/api/stripe/webhook":
+            cfg = stripe_client.load_config()
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 1024 * 1024:
+                self._send_json({"ok": False, "error": "Payload too large."}, status=413)
+                return
+            raw = self.rfile.read(length) if length else b""
+            sig = self.headers.get("Stripe-Signature", "")
+
+            try:
+                # Verified against the RAW bytes. Re-serialising the JSON first would change them
+                # and break every signature.
+                event = stripe_client.construct_event(raw, sig, cfg["webhook_secret"])
+            except stripe_client.SignatureError as e:
+                print(f"[stripe] webhook rejected: {e}")
+                self._send_json({"ok": False, "error": "Invalid signature."}, status=400)
+                return
+
+            try:
+                handled = self._handle_stripe_event(event)
+            except Exception as e:
+                # A 500 makes Stripe retry, which is what we want for a transient fault.
+                print(f"[stripe] webhook handler error on {event.get('type')}: {e}")
+                self._send_json({"ok": False, "error": "Handler error."}, status=500)
+                return
+
+            # Anything else gets a 200: an unhandled event type is not a failure, and returning an
+            # error would have Stripe retry it for days.
+            self._send_json({"ok": True, "handled": handled})
+            return
+
         if self.path == "/api/order":
             payload = self._read_json()
             email = str(payload.get("email", "")).strip().lower() if isinstance(payload, dict) else ""
@@ -988,6 +1176,100 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         self.send_response(404)
         self.end_headers()
+
+    # ---- Stripe event handling -----------------------------------------------------------------
+    def _order_for_session(self, conn, obj):
+        """Find our order from a Checkout Session, by the three ids it may carry.
+
+        Tried in order of trustworthiness: the reference we set, our own metadata, then the session
+        id we stored when the session was created.
+        """
+        ref = obj.get("client_reference_id")
+        if ref:
+            row = orders.order_by_ref(conn, ref)
+            if row is not None:
+                return row
+        meta_id = (obj.get("metadata") or {}).get("order_id")
+        if meta_id:
+            row = conn.execute("SELECT * FROM orders WHERE id=?", (meta_id,)).fetchone()
+            if row is not None:
+                return row
+        if obj.get("id"):
+            return orders.order_by_payment_ref(conn, obj["id"])
+        return None
+
+    def _handle_stripe_event(self, event):
+        """Apply one verified Stripe event. Returns True if it moved an order.
+
+        Idempotency is not implemented here — it lives in payment_events, keyed on the Stripe event
+        id, so a redelivered webhook fails the insert and becomes a no-op inside mark_paid /
+        cancel_order / refund_order.
+        """
+        etype = event.get("type", "")
+        obj = (event.get("data") or {}).get("object") or {}
+        event_id = event.get("id")
+        conn = store.connect()
+        try:
+            if etype in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+                # A card pays immediately; a delayed method (bank debit) completes the session
+                # while still unpaid, and confirms later via async_payment_succeeded. Marking the
+                # first one paid would ship goods against money that has not arrived.
+                if obj.get("payment_status") != "paid":
+                    print(f"[stripe] session {obj.get('id')} completed but unpaid "
+                          f"({obj.get('payment_status')}) — waiting for async confirmation")
+                    return False
+
+                order = self._order_for_session(conn, obj)
+                if order is None:
+                    print(f"[stripe] no order matches session {obj.get('id')}")
+                    return False
+
+                # The whole point of pricing server-side: what Stripe collected must equal what we
+                # computed. A mismatch is never fulfilled automatically.
+                if not orders.amount_matches(order, obj.get("amount_total"), obj.get("currency")):
+                    print(f"[stripe] AMOUNT MISMATCH on order {order['order_ref']}: "
+                          f"stripe={obj.get('amount_total')} {obj.get('currency')} "
+                          f"expected={order['total_cents']} {order['currency']} — NOT marking paid")
+                    return False
+
+                orders.set_payment_intent(conn, order["id"], obj.get("payment_intent"))
+                orders.mark_paid(conn, order["id"], event_id, provider="stripe", payload={
+                    "session": obj.get("id"), "payment_intent": obj.get("payment_intent"),
+                    "amount_total": obj.get("amount_total"), "currency": obj.get("currency"),
+                    "livemode": event.get("livemode"),
+                })
+                store.project_orders()
+                print(f"[stripe] order {order['order_ref']} paid "
+                      f"({(obj.get('amount_total') or 0) / 100:.2f} {obj.get('currency')})")
+                return True
+
+            if etype in ("checkout.session.expired", "checkout.session.async_payment_failed"):
+                order = self._order_for_session(conn, obj)
+                if order is None:
+                    return False
+                status = "failed" if etype.endswith("failed") else "cancelled"
+                orders.cancel_order(conn, order["id"], reason=f"stripe: {etype}",
+                                    status=status, event_id=event_id)
+                store.project_orders()
+                print(f"[stripe] order {order['order_ref']} {status}, stock released")
+                return True
+
+            if etype == "charge.refunded":
+                # A refund names the PaymentIntent, never the session — which is why both ids are
+                # stored on the order.
+                pi = obj.get("payment_intent")
+                order = orders.order_by_payment_intent(conn, pi) if pi else None
+                if order is None:
+                    print(f"[stripe] refund for unknown payment_intent {pi}")
+                    return False
+                orders.refund_order(conn, order["id"], event_id, provider="stripe")
+                store.project_orders()
+                print(f"[stripe] order {order['order_ref']} refunded, stock restored")
+                return True
+
+            return False
+        finally:
+            conn.close()
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
