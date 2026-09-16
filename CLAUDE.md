@@ -18,7 +18,8 @@ Static site, no build step, no dependencies. At the repo root:
 - [server.py](server.py) — stdlib-only dev server + tiny JSON API
 - [stripe_client.py](stripe_client.py) — Stripe Checkout over urllib; no SDK, no dependency
 - [STRIPE.md](STRIPE.md) — payment setup, the manual test script, and the go-live checklist
-- `tests/` — stdlib `unittest`; `python3 tests/test_stripe_checkout.py` needs no credentials
+- `tests/` — stdlib `unittest`, no credentials needed: `test_stripe_checkout.py` (39) and
+  `test_shipping_weights.py` (6). Run both after touching pricing, shipping or payments.
 
 ## Running it
 
@@ -294,6 +295,15 @@ Rates are weight-based, configured in the "EDIT THIS: shipping" block at the top
 - `CATEGORY_WEIGHT_OZ` — per-category shipping weight. **These are estimates**, since the workbook
   carries no weights; a product can override with its own `weightOz`. Postage bills on real weight,
   so put the stock on a scale before going live.
+  **Its keys must match `categories` in products.json exactly, and it is mirrored in `db/orders.py`**
+  — the JS quotes the buyer, the Python charges the card. Renaming a category without renaming its
+  key here is silent: the lookup misses, `DEFAULT_WEIGHT_OZ` (8 oz) applies, and nothing complains,
+  because a missing key is indistinguishable from "no estimate yet". That happened — `ff30d32`
+  renamed T-Shirts→Shirts and Backpacks→Bags and both tables kept the old keys, so **every bag
+  shipped billed 8 oz instead of 32**, roughly $3.50–$4.00 of postage per order out of pocket.
+  `test_pricing_parity` did not catch it because both copies were wrong in the same way;
+  `tests/test_shipping_weights.py` now checks the keys against the real category list as well as
+  against each other, and fails on a dead key, a missing one, or the two files disagreeing.
 - `PACKAGING_OZ` — mailer/padding, added once per order.
 - `SHIPPING_TIERS` — cheapest-first bands; the first one the order's total weight fits under wins,
   falling back to `SHIPPING_OVER_MAX`. The first band is flat for everything under 1 lb because the
@@ -494,15 +504,11 @@ Anything real (payments, an admin view, sending mail) needs a proper backend beh
   site still runs the reserve-and-DM flow, and there are still no card fields anywhere — hosted
   Checkout is what keeps it that way. Claims in the checkout copy must stay things the page really
   does; `applyPaymentCopy()` swaps every one of them with the flow.
-- **Shipping weights are keyed on category names that no longer exist.** `CATEGORY_WEIGHT_OZ` in
-  [script.js](script.js) (mirrored in `db/orders.py`) still says `"T-Shirts"` and `"Backpacks"`,
-  but the rename in `ff30d32` made those categories `Shirts` and `Bags`. Both lookups miss and fall
-  through to `DEFAULT_WEIGHT_OZ` (8 oz), so a shirt bills at 8 oz instead of 7 — trivial — and **a
-  bag bills at 8 oz instead of 32**, which is a real postage loss on every bag sold. `Belts` and
-  `Shoes` still match and are unaffected. Not fixed here on purpose: the Stripe work was explicitly
-  scoped to preserve the existing shipping calculation, and correcting this changes what buyers are
-  quoted. `test_pricing_parity` did not catch it because JS and Python carry the *same* stale keys
-  — parity is not correctness. Fix it before taking real money.
+- **Shipping tier prices are still national-average placeholders.** The weight side is now correct
+  (see Shipping below), but `SHIPPING_TIERS` is not: Ground Advantage is zone-priced, so the flat
+  table overcharges nearby buyers and undercharges distant ones. Replace it with Pirate Ship quotes
+  for the zones actually shipped to before taking real money. The category weights themselves are
+  still estimates — put the stock on a scale.
 - Resend: `/api/subscribe` has a TODO for the welcome email and drop announcements; account/API key
   not set up yet.
 - **Photo quality and provenance.** The workbook shots max out at ~420px, which is soft for a

@@ -24,8 +24,12 @@ RESERVATION_TTL_SECONDS = 30 * 60
 _SWEEP_MIN_INTERVAL = 60
 _last_sweep = 0.0
 
-# Mirrors the shipping block at the top of script.js. Kept in step by test_pricing_parity.
-CATEGORY_WEIGHT_OZ = {"T-Shirts": 7, "Belts": 10, "Shoes": 40, "Backpacks": 32}
+# Mirrors the shipping block at the top of script.js. Kept in step by test_pricing_parity — which
+# did NOT catch the stale "T-Shirts"/"Backpacks" keys, because both files carried the same wrong
+# ones. Parity is not correctness; tests/test_shipping_weights.py checks these against the real
+# category list as well as against the JS.
+CATEGORY_WEIGHT_OZ = {"Shirts": 7, "Belts": 10, "Shoes": 40, "Bags": 32,
+                      "Shorts": 9, "Tracksuits": 28}
 DEFAULT_WEIGHT_OZ = 8
 PACKAGING_OZ = 3
 SHIPPING_TIERS = [(15.99, 550), (16, 761), (32, 850), (48, 950), (80, 1200), (160, 1700)]

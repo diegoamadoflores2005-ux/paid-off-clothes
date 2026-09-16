@@ -92,11 +92,21 @@ function validateProducts(records) {
 // Per-item shipping weights. The workbook carries no weights, so these are estimates by category
 // — correct them against a kitchen scale before going live, since postage is billed on real weight.
 // A single product can override its category with a `weightOz` field.
+//
+// KEYS MUST MATCH `categories` IN products.json EXACTLY. They did not for a while: the rename in
+// ff30d32 turned "T-Shirts" into "Shirts" and "Backpacks" into "Bags", both lookups started missing,
+// and every shirt and bag quietly billed at the 8 oz fallback — trivial for a shirt, a real postage
+// loss on a 32 oz bag. Nothing failed loudly because a missing key is indistinguishable from
+// "no estimate yet". tests/test_shipping_weights.py now fails if a declared category has no entry.
 const CATEGORY_WEIGHT_OZ = {
-  "T-Shirts": 7,
+  Shirts: 7,
   Belts: 10,
   Shoes: 40,
-  Backpacks: 32,
+  Bags: 32,
+  // No stock in these two yet. Listed anyway so the first product added to one is not silently
+  // quoted at the fallback weight — these are estimates like the rest, and need a scale.
+  Shorts: 9,
+  Tracksuits: 28,
 };
 
 const PACKAGING_OZ = 3; // mailer / box / padding added once per order
