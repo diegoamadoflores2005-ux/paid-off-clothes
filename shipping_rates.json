@@ -80,6 +80,36 @@
         "dims_in not stated. Under a pound in a flat mailer dimensional weight rarely applies, but",
         "the shoe and bag bands will need real box dimensions."
       ]
+    },
+    {
+      "price_usd": 9.15,
+      "oz": 32,
+      "band": "2",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "zone_verified": true,
+      "group": "near",
+      "weighed": null,
+      "dims_in": [
+        12,
+        9,
+        3
+      ],
+      "cubic_in": 324,
+      "service": "USPS Ground Advantage",
+      "collected": "2026-09-16",
+      "source": "Pirate Ship, verified quote supplied by owner",
+      "use": "rate_table",
+      "notes": [
+        "Fills core.2.near and nothing else.",
+        "12x9x3 = 324 cubic inches. Ground Advantage applies dimensional weight only above",
+        "1 cubic foot (1728 cu in), so this box is billed on actual weight — dim weight is not a",
+        "factor at this size. Worth knowing before quoting the shoe and bag bands, where the box",
+        "gets big enough for it to start mattering.",
+        "First quote on file with dimensions recorded. Use this same box family for the remaining",
+        "near-group quotes so the column stays internally comparable."
+      ]
     }
   ],
   "origin_note": "Vail, AZ. The ONLY place an origin belongs: shipping_cents() in db/orders.py and shippingFor() in script.js take weight and nothing else, so writing 85641 into either would be decoration, not configuration. When the zone engine is built it reads the origin from here.",
@@ -119,7 +149,7 @@
         "far": null
       },
       "2": {
-        "near": null,
+        "near": 9.15,
         "mid": null,
         "far": null
       },
@@ -211,7 +241,8 @@
         "  - one included an extra (insurance, signature) the other did not",
         "  - one was a retail rate rather than Pirate Ship's commercial rate",
         "$5.40 is used because it is the verified one. If the sub-1-lb-is-flat assumption does not",
-        "hold for your account, the whole first band needs re-checking, not just this cell."
+        "hold for your account, the whole first band needs re-checking, not just this cell.",
+        "Update: the 2 lb quote came in at 12x9x3 = 324 cu in, well under the 1728 cu in where dimensional weight begins. If the sub-1-lb pair was quoted in similarly small packaging, dim weight cannot explain the $5.82/$5.40 gap either — which leaves date, an extra service, or retail-vs-commercial as the remaining explanations."
       ]
     }
   ]
