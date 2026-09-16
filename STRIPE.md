@@ -174,20 +174,32 @@ on the customer, not the shop — but it is the kind of number that loses a bulk
 **Worksheet.** Get one quote per row from Pirate Ship for your most common destination zone, then
 fill in every band including the five that do not exist yet:
 
-| Weight up to | oz | Current | Real quote |
-|---|---|---|---|
-| under 1 lb | 15.99 | $5.50 | |
-| 1 lb | 16 | $7.61 | |
-| 2 lb | 32 | $8.50 | |
-| 3 lb | 48 | $9.50 | |
-| **4 lb** | **64** | *missing* | |
-| 5 lb | 80 | $12.00 | |
-| **6 lb** | **96** | *missing* | |
-| **7 lb** | **112** | *missing* | |
-| **8 lb** | **128** | *missing* | |
-| **9 lb** | **144** | *missing* | |
-| 10 lb | 160 | $17.00 | |
-| over 10 lb | — | $22.00 | |
+| Weight up to | oz | Current | Real quote | Reached by |
+|---|---|---|---|---|
+| under 1 lb | 15.99 | $5.50 | | 1 shirt, 1 belt |
+| 1 lb | 16 | $7.61 | | — |
+| 2 lb | 32 | $8.50 | | 2–4 shirts, 2 belts |
+| 3 lb | 48 | $9.50 | | 1 pair shoes, 1 bag, 3–4 belts |
+| **4 lb** | **64** | *missing* | | mixed baskets — the most-hit missing band |
+| 5 lb | 80 | $12.00 | | 2 bags |
+| **6 lb** | **96** | *missing* | | 2 pairs shoes, 12 shirts |
+| **7 lb** | **112** | *missing* | | 3 bags |
+| **8 lb** | **128** | *missing* | | 3 pairs shoes |
+| **9 lb** | **144** | *missing* | | 4 bags |
+| 10 lb | 160 | $17.00 | | — |
+| 11 lb | 176 | *flat $22* | | 4 pairs shoes |
+| 13 lb | 208 | *flat $22* | | 5 pairs shoes |
+| 16 lb | 256 | *flat $22* | | 6 pairs shoes |
+
+**`SHIPPING_OVER_MAX` is a flat $22 for everything above 10 lb, with no ceiling.** That is the one
+place the table can lose the shop money rather than overcharge a buyer: four pairs of shoes is
+11 lb, six pairs is 16 lb, and both are quoted $22. Get a real quote for the heaviest order that is
+plausible and either extend the bands to cover it or raise the fallback. Shoes are the only stock
+heavy enough to get there — 40 oz a pair — so this is a bulk-shoe problem specifically.
+
+**Pirate Ship will also ask for box dimensions**, not just weight. Ground Advantage applies
+dimensional weight to large-but-light parcels, so quote with the boxes actually used — a shoe box
+in a mailer can bill above its scale weight.
 
 Edit `SHIPPING_TIERS` in [script.js](script.js) **and the mirrored list in `db/orders.py`** — the
 first quotes the buyer, the second charges the card, and `tests/test_shipping_weights.py` fails if
