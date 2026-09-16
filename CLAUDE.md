@@ -19,7 +19,8 @@ Static site, no build step, no dependencies. At the repo root:
 - [stripe_client.py](stripe_client.py) — Stripe Checkout over urllib; no SDK, no dependency
 - [STRIPE.md](STRIPE.md) — payment setup, the manual test script, and the go-live checklist
 - `tests/` — stdlib `unittest`, no credentials needed: `test_stripe_checkout.py` (39) and
-  `test_shipping_weights.py` (6). Run both after touching pricing, shipping or payments.
+  `test_shipping_weights.py` (13 — category weights *and* the rate table). Run both after touching
+  pricing, shipping or payments.
 
 ## Running it
 
@@ -309,6 +310,14 @@ Rates are weight-based, configured in the "EDIT THIS: shipping" block at the top
   `test_pricing_parity` did not catch it because both copies were wrong in the same way;
   `tests/test_shipping_weights.py` now checks the keys against the real category list as well as
   against each other, and fails on a dead key, a missing one, or the two files disagreeing.
+- `SHIPPING_TIERS` gets the same treatment in that file: band edges must land on whole pounds
+  (USPS bills at the rounded-up pound, so an edge anywhere else splits one carrier price into two
+  of ours), bands must ascend in weight and price, postage must never fall as weight rises, and the
+  JS and Python tables must match. Which pounds have no band at all is recorded in
+  `KNOWN_MISSING_POUNDS` and checked both ways, so closing the gap is a deliberate edit rather than
+  something nobody writes down. That file loads `db/orders.py` **from source, not through
+  `__pycache__`** — a .pyc is validated on (mtime, size), and a same-length edit in the same second
+  is served from cache, which had the tests checking bytecode instead of the file on disk.
 - `PACKAGING_OZ` — mailer/padding, added once per order.
 - `SHIPPING_TIERS` — cheapest-first bands; the first one the order's total weight fits under wins,
   falling back to `SHIPPING_OVER_MAX`. The first band is flat for everything under 1 lb because the

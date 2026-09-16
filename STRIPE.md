@@ -190,8 +190,17 @@ fill in every band including the five that do not exist yet:
 | over 10 lb | — | $22.00 | |
 
 Edit `SHIPPING_TIERS` in [script.js](script.js) **and the mirrored list in `db/orders.py`** — the
-first quotes the buyer, the second charges the card. `tests/test_shipping_weights.py` covers the
-weights; it does not check the prices, because only you know what the carrier quoted.
+first quotes the buyer, the second charges the card, and `tests/test_shipping_weights.py` fails if
+they disagree.
+
+That file also guards the table's shape: every band edge must land on a whole pound, bands must
+ascend in both weight and price, and postage must never fall as weight rises. It does **not** check
+the prices themselves — only you know what the carrier quoted.
+
+**When you add the missing bands, shrink `KNOWN_MISSING_POUNDS` at the top of that test file to
+match, and delete it once it is empty.** The test compares the recorded gap against reality and
+fails in both directions, so adding a 6 lb band without updating the set is a loud failure rather
+than a silent pass — closing the gap should be written down, not just done.
 
 The category weights are still estimates too. Put one of each on a kitchen scale before real money
 moves — postage bills on what the parcel actually weighs, not on this table.
