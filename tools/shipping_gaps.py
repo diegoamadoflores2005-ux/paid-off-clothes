@@ -85,10 +85,22 @@ def main():
     if ref:
         print("Held as reference, deliberately not in the table:")
         for q in ref:
-            zone = (f"zone {q['zone_inferred']} inferred, UNCONFIRMED"
-                    if q.get("zone_inferred") and not q.get("zone_verified") else "zone unknown")
-            weighed = "weighed" if q.get("weighed") else "weight ESTIMATED, not weighed"
+            if q.get("zone") is not None and q.get("zone_verified"):
+                zone = f"zone {q['zone']} confirmed"
+            elif q.get("zone_inferred"):
+                zone = f"zone {q['zone_inferred']} inferred, UNCONFIRMED"
+            else:
+                zone = "zone unknown"
+            weighed = {True: "weighed", False: "weight ESTIMATED, not weighed"}.get(
+                q.get("weighed"), "weighed: not stated")
             print(f"  ${q['price_usd']:.2f} at {q['oz']} oz to {q['dest_zip']} — {zone}; {weighed}")
+        print()
+
+    # A conflict is the kind of thing that must be in front of you every time, not filed away.
+    for c in rates.get("_conflicts", []):
+        print(f"!! CONFLICT in {c['cell']}: {' vs '.join(c['quotes'])}")
+        for line in c.get("why_it_matters", []):
+            print(f"   {line}")
         print()
 
     print(f"cells filled : {len(filled)} of {len(all_cells)}")

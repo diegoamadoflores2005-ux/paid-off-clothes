@@ -40,23 +40,46 @@
       "oz": 8,
       "band": "sub",
       "dest_zip": "90210",
-      "zone": null,
+      "zone": 4,
       "weighed": false,
       "dims_in": null,
       "collected": "2026-09-16",
       "source": "Pirate Ship calculator, sample quote supplied by owner",
       "notes": [
-        "REFERENCE ONLY, by the owner's instruction. Not applied to any band.",
-        "Two things keep it out of the table: the zone is inferred and unconfirmed, and the 8 oz was",
-        "estimated rather than weighed.",
-        "Pirate Ship shows the zone on the quote screen — confirm it there and set zone_verified.",
-        "For comparison the site charges $5.50 flat under 1 lb, so this lane looks ~$0.32 low."
+        "REFERENCE ONLY. Superseded for the sub/near cell by the 12.8 oz quote below.",
+        "Zone 4 is now confirmed, which matched the distance inference.",
+        "STILL NOT USED: the 8 oz was estimated rather than weighed, and it CONFLICTS with the",
+        "verified quote — see _conflicts below."
       ],
       "zone_inferred": 4,
       "zone_inference_basis": "85641 -> 90210 is about 450 miles, and USPS zone 4 covers 301-600 miles. Distance is how zones are broadly set, but the published chart is by ZIP prefix pair and is authoritative.",
-      "zone_verified": false,
+      "zone_verified": true,
       "group_if_confirmed": "near",
-      "use": "reference only"
+      "use": "reference only",
+      "zone_confirmed_by": "owner, 2026-09-16"
+    },
+    {
+      "price_usd": 5.4,
+      "oz": 12.8,
+      "band": "sub",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "zone_verified": true,
+      "group": "near",
+      "weighed": null,
+      "dims_in": null,
+      "service": "USPS Ground Advantage",
+      "collected": "2026-09-16",
+      "source": "Pirate Ship, verified quote supplied by owner",
+      "use": "rate_table",
+      "notes": [
+        "Fills core.sub.near and nothing else.",
+        "weighed is null: not stated. It matters less here than usual — 12.8 oz leaves 3.2 oz of",
+        "headroom to the 15.99 oz band edge, so a modest weighing error stays in the same band.",
+        "dims_in not stated. Under a pound in a flat mailer dimensional weight rarely applies, but",
+        "the shoe and bag bands will need real box dimensions."
+      ]
     }
   ],
   "origin_note": "Vail, AZ. The ONLY place an origin belongs: shipping_cents() in db/orders.py and shippingFor() in script.js take weight and nothing else, so writing 85641 into either would be decoration, not configuration. When the zone engine is built it reads the origin from here.",
@@ -91,7 +114,7 @@
     "_note": "null means no quote yet. Nothing here is inferred from a neighbouring cell, and no cell is filled by interpolation. 1 lb is absent on purpose: no basket of 7/10/32/40 oz goods plus 3 oz packaging weighs exactly 16 oz, so that band is unreachable.",
     "core": {
       "sub": {
-        "near": null,
+        "near": 5.4,
         "mid": null,
         "far": null
       },
@@ -171,5 +194,25 @@
     "UNTIL THIS IS POPULATED, ZONE PRICING IS OFF and the flat ladder runs — see",
     "zone_pricing_ready() in db/orders.py. A half-filled map would quote some buyers by zone and",
     "others by the flat table, which is worse than either."
+  ],
+  "_conflicts": [
+    {
+      "cell": "sub / near (zone 4)",
+      "quotes": [
+        "$5.82 at 8 oz to 90210",
+        "$5.40 at 12.8 oz to 90210"
+      ],
+      "why_it_matters": [
+        "Same destination, same zone, both under a pound — and the HEAVIER parcel quoted LOWER.",
+        "Since the 12 July 2026 change every sub-1-lb Ground Advantage parcel costs the same",
+        "within a zone, so these two should have been identical. One of the following is true:",
+        "  - the quotes were taken with different box dimensions, and one hit dimensional weight",
+        "  - one was taken on a different date, across a rate change",
+        "  - one included an extra (insurance, signature) the other did not",
+        "  - one was a retail rate rather than Pirate Ship's commercial rate",
+        "$5.40 is used because it is the verified one. If the sub-1-lb-is-flat assumption does not",
+        "hold for your account, the whole first band needs re-checking, not just this cell."
+      ]
+    }
   ]
 }
