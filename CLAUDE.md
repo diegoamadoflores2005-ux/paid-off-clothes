@@ -154,6 +154,11 @@ Everything is wired up from a single `DOMContentLoaded` handler at the bottom of
 **Test mode only, and not deployed.** Full setup, the manual test script and the go-live checklist
 are in [STRIPE.md](STRIPE.md); this is the part a future change has to not break.
 
+`python3 tools/stripe_preflight.py` reports what a given machine is missing — key, mode, webhook
+secret, return URL, payment columns — and prints the next step for each. It **never prints a
+secret** (keys are redacted to mode + last four), so its output is safe to paste into a chat or an
+issue, and it exits non-zero unless payments would really be enabled.
+
 `stripe_client.py` talks to Stripe's REST API with `urllib` rather than the `stripe` SDK, so the
 project keeps its zero-dependency promise. Form encoding, bracket notation for nested params and
 webhook signatures are all implemented there.
@@ -504,11 +509,14 @@ Anything real (payments, an admin view, sending mail) needs a proper backend beh
   site still runs the reserve-and-DM flow, and there are still no card fields anywhere — hosted
   Checkout is what keeps it that way. Claims in the checkout copy must stay things the page really
   does; `applyPaymentCopy()` swaps every one of them with the flow.
-- **Shipping tier prices are still national-average placeholders.** The weight side is now correct
-  (see Shipping below), but `SHIPPING_TIERS` is not: Ground Advantage is zone-priced, so the flat
-  table overcharges nearby buyers and undercharges distant ones. Replace it with Pirate Ship quotes
-  for the zones actually shipped to before taking real money. The category weights themselves are
-  still estimates — put the stock on a scale.
+- **Shipping rates need two fixes before real money** (weights are correct as of `844518a`;
+  worksheet in [STRIPE.md](STRIPE.md)). First, the prices are national-average placeholders and
+  Ground Advantage is zone-priced, so replace them with Pirate Ship quotes for the zones actually
+  shipped to. Second, **`SHIPPING_TIERS` has no 4, 6, 7, 8 or 9 lb band** — it jumps 3→5→10 — and
+  USPS bills a parcel at its rounded-up pound, so anything in a missing band pays the next band up.
+  A 12-shirt order weighs 5.4 lb and is quoted the **10 lb** rate of $17.00; so are 2 pairs of
+  shoes, 3 bags, and 2 bags + 4 shirts. The overcharge lands on the customer rather than the shop,
+  which is why nothing looked wrong. Category weights are still estimates too — use a scale.
 - Resend: `/api/subscribe` has a TODO for the welcome email and drop announcements; account/API key
   not set up yet.
 - **Photo quality and provenance.** The workbook shots max out at ~420px, which is soft for a

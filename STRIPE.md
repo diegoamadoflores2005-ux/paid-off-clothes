@@ -32,6 +32,23 @@ browser                     server.py                      Stripe
 shopper who closes the tab mid-redirect still gets their order; someone who hand-types
 `?checkout=success` gets nothing.
 
+## What is missing right now
+
+Run this on the machine you are testing from — it never prints a secret, so its output is safe to
+paste anywhere:
+
+```bash
+python3 tools/stripe_preflight.py          # config only, no network
+python3 tools/stripe_preflight.py --api    # also asks Stripe whether the key works
+```
+
+It checks the key and its mode, the webhook secret, the return URL, and that the database has the
+payment columns, then prints the exact next step for anything missing. Exit status is 0 only when
+payments would actually be enabled.
+
+As of this commit, on a fresh clone, what it reports missing is **the two credentials and nothing
+else** — the code, the schema and the return URL are all in place.
+
 ## Setup (test mode)
 
 1. **Keys.** Stripe Dashboard → Developers → API keys, in test mode. Then either:
@@ -125,6 +142,59 @@ verification are all the real code. What they cover:
   deduct twice; expiry releases stock; a refund restores it.
 - **Leaks** — `/api/checkout/status` returns no customer details; `/api/payments/config` returns no
   keys; `/stripe_config.json` 404s.
+
+## Shipping rates — verify before any real card
+
+The weights are now correct (fixed in `844518a`). **The rates are not**, in two separate ways.
+
+**1. The prices are national-average placeholders.** Ground Advantage is zone-priced. Every number
+in `SHIPPING_TIERS` needs replacing with a real quote from Pirate Ship's calculator for the zones
+actually shipped to.
+
+**2. The table skips five weight bands.** USPS bills a parcel at its rounded-up pound, but the
+table jumps 3 lb → 5 lb → 10 lb. Anything landing in a missing band is charged at the next band up:
+
+| Parcel really weighs | Currently charged | Band |
+|---|---|---|
+| 4 lb | $12.00 | no 4 lb band — billed at the 5 lb rate |
+| 6, 7, 8, 9 lb | $17.00 | no 6–9 lb bands — all billed at the 10 lb rate |
+
+That is not theoretical. Ordinary baskets land there:
+
+| Basket | Weight | Charged | USPS bills |
+|---|---|---|---|
+| 12 shirts | 5.4 lb | $17.00 | 6 lb |
+| 2 pairs of shoes | 5.2 lb | $17.00 | 6 lb |
+| 3 bags | 6.2 lb | $17.00 | 7 lb |
+| 2 bags + 4 shirts | 5.9 lb | $17.00 | 6 lb |
+
+A buyer with twelve shirts is quoted the ten-pound rate. Nothing is *lost* — the overcharge lands
+on the customer, not the shop — but it is the kind of number that loses a bulk sale.
+
+**Worksheet.** Get one quote per row from Pirate Ship for your most common destination zone, then
+fill in every band including the five that do not exist yet:
+
+| Weight up to | oz | Current | Real quote |
+|---|---|---|---|
+| under 1 lb | 15.99 | $5.50 | |
+| 1 lb | 16 | $7.61 | |
+| 2 lb | 32 | $8.50 | |
+| 3 lb | 48 | $9.50 | |
+| **4 lb** | **64** | *missing* | |
+| 5 lb | 80 | $12.00 | |
+| **6 lb** | **96** | *missing* | |
+| **7 lb** | **112** | *missing* | |
+| **8 lb** | **128** | *missing* | |
+| **9 lb** | **144** | *missing* | |
+| 10 lb | 160 | $17.00 | |
+| over 10 lb | — | $22.00 | |
+
+Edit `SHIPPING_TIERS` in [script.js](script.js) **and the mirrored list in `db/orders.py`** — the
+first quotes the buyer, the second charges the card. `tests/test_shipping_weights.py` covers the
+weights; it does not check the prices, because only you know what the carrier quoted.
+
+The category weights are still estimates too. Put one of each on a kitchen scale before real money
+moves — postage bills on what the parcel actually weighs, not on this table.
 
 ## Going live
 
