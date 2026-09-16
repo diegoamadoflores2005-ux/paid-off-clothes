@@ -210,9 +210,24 @@ heavy enough to get there — 40 oz a pair — so this is a bulk-shoe problem sp
 dimensional weight to large-but-light parcels, so quote with the boxes actually used — a shoe box
 in a mailer can bill above its scale weight.
 
-Edit `SHIPPING_TIERS` in [script.js](script.js) **and the mirrored list in `db/orders.py`** — the
-first quotes the buyer, the second charges the card, and `tests/test_shipping_weights.py` fails if
-they disagree.
+**Applying them.** Don't hand-edit the three files — that is how the weight-key bug happened.
+Feed the quotes to the applier, which writes all three together or none of them:
+
+```bash
+python3 tools/apply_shipping_rates.py --show                    # the ladder as it stands
+python3 tools/apply_shipping_rates.py --dry-run sub=5.75 1=8.10 # see the blocks, write nothing
+python3 tools/apply_shipping_rates.py sub=5.75 1=8.10 2=9.05 …  # apply
+```
+
+It refuses a ladder that goes backwards, flags a step an order of magnitude off its neighbours
+(a slipped decimal), computes `KNOWN_MISSING_POUNDS` from what you actually quoted, then runs both
+suites — and **restores every file if either fails**, so a rate in the JS that the Python does not
+charge can never be left behind. Bands you omit are simply not in the ladder; their weight falls to
+the band above, or to the fallback.
+
+`SHIPPING_TIERS` lives in [script.js](script.js) and mirrored in `db/orders.py` — the first quotes
+the buyer, the second charges the card, and `tests/test_shipping_weights.py` fails if they
+disagree.
 
 That file also guards the table's shape: every band edge must land on a whole pound, bands must
 ascend in both weight and price, and postage must never fall as weight rises. It does **not** check
