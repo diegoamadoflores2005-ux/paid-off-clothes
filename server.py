@@ -1033,6 +1033,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         # Keyed on the order, so a retried POST reuses Stripe's first answer
                         # instead of opening a second session against the same reserved stock.
                         idempotency_key=f"poc-session-{result['order_ref']}",
+                        # Taken from the reservation TTL rather than a constant of its own: the
+                        # window a buyer can pay in and the window the stock is held for are the
+                        # same window, and must stay that way.
+                        expires_in=orders.RESERVATION_TTL_SECONDS,
                     )
                 except stripe_client.StripeError as e:
                     # The order is holding stock for a payment that can now never happen. Release
@@ -1230,6 +1234,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     print(f"[stripe] AMOUNT MISMATCH on order {order['order_ref']}: "
                           f"stripe={obj.get('amount_total')} {obj.get('currency')} "
                           f"expected={order['total_cents']} {order['currency']} — NOT marking paid")
+                    return False
+
+                # An order that has left 'pending' cannot be paid, and retrying will never
+                # change that — so this is a 200 with a loud log, not a 500 that Stripe redelivers
+                # for days. It also needs a human: the buyer's card may genuinely have been
+                # charged for stock that was already released.
+                if order["status"] != "pending":
+                    if order["status"] in ("paid", "fulfilled"):
+                        print(f"[stripe] order {order['order_ref']} is already {order['status']}; "
+                              f"event {event_id} ignored")
+                    else:
+                        print(f"[stripe] *** PAYMENT FOR A {order['status'].upper()} ORDER *** "
+                              f"{order['order_ref']}: Stripe collected "
+                              f"{(obj.get('amount_total') or 0) / 100:.2f} "
+                              f"{obj.get('currency')} on session {obj.get('id')}, but the order was "
+                              f"{order['status']} and its stock released. NOT fulfilled "
+                              f"automatically — refund it or re-reserve the units by hand.")
                     return False
 
                 orders.set_payment_intent(conn, order["id"], obj.get("payment_intent"))

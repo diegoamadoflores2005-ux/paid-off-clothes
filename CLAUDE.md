@@ -20,7 +20,8 @@ Static site, no build step, no dependencies. At the repo root:
 - [STRIPE.md](STRIPE.md) — payment setup, the manual test script, and the go-live checklist
 - `tests/` — stdlib `unittest`, no credentials needed: `test_stripe_checkout.py` (39) and
   `test_shipping_weights.py` (13 — category weights *and* the rate table). Run both after touching
-  pricing, shipping or payments.
+  pricing, shipping or payments. The Stripe suite covers the shapes a declined card and a 3DS card
+  make on the server, and checks inventory is conserved across every ending an order can have.
 
 ## Running it
 
@@ -194,7 +195,18 @@ a redelivered webhook fails that insert and becomes a no-op inside `mark_paid` /
 a test that replays an event and asserts stock does not move twice.
 
 **An unhandled event type returns 200, not an error.** A non-2xx makes Stripe retry for days.
-Genuine handler faults do return 500, because those *should* be retried.
+Genuine handler faults do return 500, because those *should* be retried. A payment arriving for an
+order that has left `pending` is in the first category, not the second — retrying can never make a
+cancelled order payable — so it returns 200 and logs instead. When that order was cancelled rather
+than already paid, the log is deliberately loud: Stripe collected money for stock the shop has
+released, and that needs a person, not a retry.
+
+**The Checkout Session is given an `expires_at` equal to `RESERVATION_TTL_SECONDS`.** A session is
+payable for 24 hours by default while the reservation lasts 30 minutes, so without it a buyer could
+pay most of a day later for units already back on the shelf and possibly resold — money taken,
+nothing to ship. The value is passed from the TTL rather than being a constant of its own, so the
+window a buyer can pay in and the window stock is held for cannot drift apart. Stripe refuses an
+`expires_at` under 30 minutes, which is why a shorter TTL is clamped rather than mirrored.
 
 `set_payment_intent()` is deliberately non-fatal. It only stores the id a later refund event needs;
 letting its unique-index violation raise would abort the handler before `mark_paid` ran, so Stripe

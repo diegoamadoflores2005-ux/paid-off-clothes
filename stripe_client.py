@@ -202,8 +202,13 @@ def api_get(path, params=None, secret_key=None):
     return _request("GET", path, params, secret_key=secret_key)
 
 
+# Stripe refuses an expires_at less than 30 minutes out, so a shorter reservation TTL cannot be
+# mirrored onto the session and the two would silently diverge again.
+MIN_SESSION_TTL_SECONDS = 30 * 60
+
+
 def create_checkout_session(order, lines, *, success_url, cancel_url, email=None,
-                            idempotency_key=None, secret_key=None):
+                            idempotency_key=None, secret_key=None, expires_in=None):
     """Build a hosted Checkout Session from an order the SERVER has already priced.
 
     `lines` are the priced rows out of orders.quote() — unit_cents came from the pricing ladder in
@@ -240,6 +245,12 @@ def create_checkout_session(order, lines, *, success_url, cancel_url, email=None
             for ln in lines
         ],
     }
+    if expires_in:
+        # THE SESSION MUST NOT OUTLIVE THE STOCK IT IS HOLDING. A Checkout Session stays payable for
+        # 24 hours by default, while the reservation is released after 30 minutes — so without this
+        # a buyer could pay, most of a day later, for units the shop had already put back on the
+        # shelf and possibly sold to someone else. Money taken, nothing to ship.
+        params["expires_at"] = int(time.time()) + max(int(expires_in), MIN_SESSION_TTL_SECONDS)
     if email:
         params["customer_email"] = email
     if order.get("shipping_cents"):

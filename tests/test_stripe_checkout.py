@@ -428,6 +428,20 @@ class TestServerSidePricing(unittest.TestCase):
         row = order_row(out["ref"])
         self.assertEqual(charged, row["total_cents"])
 
+    def test_the_session_expires_with_the_stock_hold(self):
+        """A Checkout Session is payable for 24h by default while the reservation lasts 30 minutes.
+        Left alone, a buyer could pay most of a day later for units already back on the shelf."""
+        shirt = a_shirt()
+        before = len(stripe_calls)
+        status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 1}])
+        self.assertEqual(status, 200, out)
+
+        params = stripe_calls[before]["params"]
+        self.assertIn("expires_at", params, "the session must be given an expiry")
+        window = params["expires_at"] - time.time()
+        self.assertAlmostEqual(window, orders.RESERVATION_TTL_SECONDS, delta=30,
+                               msg="the payable window must match the reservation window")
+
     def test_unknown_product_is_refused(self):
         status, out = start_checkout([{"name": "Not A Real Product", "size": "M", "qty": 1}])
         self.assertEqual(status, 409, out)
@@ -620,6 +634,209 @@ class TestWebhook(unittest.TestCase):
         code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
         self.assertEqual(code, 200)
         self.assertFalse(out["handled"])
+
+
+# ---------- the shapes a declined card and a 3DS card actually make ------------------------------
+class TestCardOutcomes(unittest.TestCase):
+    """What the server sees for a decline and for 3D Secure.
+
+    Neither can be driven from here — they happen inside Stripe's hosted page, in a browser, on a
+    real account. What IS testable is the event sequence each one produces on our side, and whether
+    inventory survives it. That is the part a bug would live in; Stripe declining a card is Stripe's
+    to get right.
+    """
+
+    def _pending(self, qty=2):
+        shirt = a_shirt(need=qty)
+        status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": qty}])
+        self.assertEqual(status, 200, out)
+        return shirt, order_row(out["ref"])
+
+    # ---- declined card -------------------------------------------------------------------------
+    def test_declined_card_sends_nothing_so_the_order_stays_pending(self):
+        """A decline produces NO completed event. The order must not drift to paid on its own, and
+        the units must stay held while the buyer retries with another card."""
+        shirt, row = self._pending()
+        phys = physical_qty(shirt["id"], shirt["size"])
+        avail = available_qty(shirt["id"], shirt["size"])
+
+        # ...time passes, no webhook arrives...
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys,
+                         "a declined payment must never deduct stock")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), avail,
+                         "but the reservation must hold while they try another card")
+
+    def test_abandoned_after_decline_releases_stock_on_the_sweep(self):
+        """The buyer gives up. Nothing from Stripe ever arrives, so the TTL is what frees the units
+        — the path that runs when no webhook is coming at all."""
+        shirt, row = self._pending()
+        held = available_qty(shirt["id"], shirt["size"])
+
+        conn = db()
+        try:
+            # Simulate the reservation ageing out rather than sleeping 30 minutes.
+            expired = orders.expire_pending(conn, ttl_seconds=0)
+        finally:
+            conn.close()
+
+        self.assertTrue(any(e["ref"] == row["order_ref"] for e in expired),
+                        "the pending order should have been swept")
+        self.assertEqual(order_row(row["order_ref"])["status"], "cancelled")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), held + 2,
+                         "units must go back on the shelf")
+
+    def test_a_swept_order_cannot_then_be_paid(self):
+        """The dangerous ordering: stock released, and a late webhook arrives anyway. It must not
+        deduct stock for an order that no longer holds any."""
+        shirt, row = self._pending()
+        conn = db()
+        try:
+            orders.expire_pending(conn, ttl_seconds=0)
+        finally:
+            conn.close()
+        phys = physical_qty(shirt["id"], shirt["size"])
+
+        payload, header = signed_webhook(
+            completed_event(row["payment_ref"], row["order_ref"], row["total_cents"]))
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+
+        self.assertEqual(code, 200, "a late event is not a server fault")
+        self.assertEqual(order_row(row["order_ref"])["status"], "cancelled",
+                         "a cancelled order must not flip to paid")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys,
+                         "and must not deduct stock it is no longer holding")
+
+    def test_a_second_attempt_after_a_decline_is_a_separate_order(self):
+        """Retrying with a good card is a fresh session; the first order must not be double-paid."""
+        shirt = a_shirt(need=4)
+        _, first = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 2}],
+                                  key="decline-retry-1")
+        _, second = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 2}],
+                                   key="decline-retry-2")
+        self.assertNotEqual(first["ref"], second["ref"])
+        r2 = order_row(second["ref"])
+        phys = physical_qty(shirt["id"], shirt["size"])
+
+        payload, header = signed_webhook(
+            completed_event(r2["payment_ref"], r2["order_ref"], r2["total_cents"]))
+        post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+
+        self.assertEqual(order_row(second["ref"])["status"], "paid")
+        self.assertEqual(order_row(first["ref"])["status"], "pending",
+                         "paying the retry must not touch the abandoned first attempt")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys - 2,
+                         "exactly one order's worth of stock moves")
+
+    # ---- 3D Secure -----------------------------------------------------------------------------
+    def test_3ds_sequence_pays_once(self):
+        """3DS can complete the session before the money lands: `completed` arrives unpaid, then
+        `async_payment_succeeded` confirms. Treating the first as payment would ship on an
+        authentication that had not cleared yet."""
+        shirt, row = self._pending()
+        phys = physical_qty(shirt["id"], shirt["size"])
+
+        pending_evt = completed_event(row["payment_ref"], row["order_ref"], row["total_cents"],
+                                      event_id="evt_3ds_unpaid", payment_status="unpaid")
+        payload, header = signed_webhook(pending_evt)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertFalse(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "pending")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys,
+                         "no stock moves on an unpaid completion")
+
+        confirmed = {
+            "id": "evt_3ds_paid", "type": "checkout.session.async_payment_succeeded",
+            "livemode": False,
+            "data": {"object": {"id": row["payment_ref"], "client_reference_id": row["order_ref"],
+                                "payment_status": "paid", "amount_total": row["total_cents"],
+                                "currency": "usd", "payment_intent": "pi_3ds_" + row["order_ref"]}},
+        }
+        payload, header = signed_webhook(confirmed)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertTrue(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "paid")
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys - 2,
+                         "and exactly one deduction once it clears")
+
+    def test_failed_3ds_authentication_releases_stock(self):
+        """Authentication refused: async_payment_failed. Same release as any other failure."""
+        shirt, row = self._pending()
+        held = available_qty(shirt["id"], shirt["size"])
+        event = {
+            "id": "evt_3ds_failed_" + row["order_ref"],
+            "type": "checkout.session.async_payment_failed", "livemode": False,
+            "data": {"object": {"id": row["payment_ref"], "client_reference_id": row["order_ref"]}},
+        }
+        payload, header = signed_webhook(event)
+        code, out = post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+        self.assertEqual(code, 200)
+        self.assertTrue(out["handled"])
+        self.assertEqual(order_row(row["order_ref"])["status"], "failed")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), held + 2)
+
+
+# ---------- inventory is conserved across every ending -------------------------------------------
+class TestInventoryConservation(unittest.TestCase):
+    """Whatever route an order takes, the shelf must end up telling the truth.
+
+    Checked as a balance rather than per-step: only a sale should ever leave stock lower, and
+    nothing should leave it higher than it started.
+    """
+
+    def _cycle(self, ending):
+        shirt = a_shirt(need=3)
+        start_phys = physical_qty(shirt["id"], shirt["size"])
+        start_avail = available_qty(shirt["id"], shirt["size"])
+        status, out = start_checkout([{"name": shirt["name"], "size": shirt["size"], "qty": 3}])
+        self.assertEqual(status, 200, out)
+        row = order_row(out["ref"])
+        ending(shirt, row)
+        return shirt, start_phys, start_avail
+
+    def test_paid_then_refunded_returns_to_the_starting_count(self):
+        def ending(shirt, row):
+            pi = "pi_cons_" + row["order_ref"]
+            payload, header = signed_webhook(
+                completed_event(row["payment_ref"], row["order_ref"], row["total_cents"],
+                                payment_intent=pi))
+            post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+            refund = {"id": "evt_cons_refund_" + row["order_ref"], "type": "charge.refunded",
+                      "livemode": False,
+                      "data": {"object": {"id": "ch_x", "payment_intent": pi, "refunded": True}}}
+            payload, header = signed_webhook(refund)
+            post("/api/stripe/webhook", payload, {"Stripe-Signature": header}, raw=True)
+
+        shirt, phys, avail = self._cycle(ending)
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys)
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), avail,
+                         "a refunded order must leave no reservation behind either")
+
+    def test_expired_reservation_returns_to_the_starting_count(self):
+        def ending(shirt, row):
+            conn = db()
+            try:
+                orders.expire_pending(conn, ttl_seconds=0)
+            finally:
+                conn.close()
+
+        shirt, phys, avail = self._cycle(ending)
+        self.assertEqual(physical_qty(shirt["id"], shirt["size"]), phys)
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), avail)
+
+    def test_no_size_is_ever_oversold(self):
+        """The invariant that matters most: available stock can reach zero but never go under it,
+        however many orders this suite has put through."""
+        conn = db()
+        try:
+            bad = conn.execute("""SELECT product_id, size, physical_qty, reserved_qty, available_qty
+                                  FROM size_availability
+                                  WHERE available_qty < 0 OR physical_qty < 0""").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([dict(r) for r in bad], [], "a size went negative")
 
 
 # ---------- the return page --------------------------------------------------------------------------
