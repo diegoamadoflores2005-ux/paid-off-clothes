@@ -1233,14 +1233,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return False
 
                 orders.set_payment_intent(conn, order["id"], obj.get("payment_intent"))
-                orders.mark_paid(conn, order["id"], event_id, provider="stripe", payload={
+                res = orders.mark_paid(conn, order["id"], event_id, provider="stripe", payload={
                     "session": obj.get("id"), "payment_intent": obj.get("payment_intent"),
                     "amount_total": obj.get("amount_total"), "currency": obj.get("currency"),
                     "livemode": event.get("livemode"),
                 })
                 store.project_orders()
-                print(f"[stripe] order {order['order_ref']} paid "
-                      f"({(obj.get('amount_total') or 0) / 100:.2f} {obj.get('currency')})")
+                # Say which of the two happened. Stripe redelivers after any non-2xx and after an
+                # outage, and payment_events makes the second delivery a no-op — but printing
+                # "paid" again reads like a second charge to whoever is watching the console,
+                # which is exactly when someone is watching it.
+                if res.get("duplicate"):
+                    print(f"[stripe] order {order['order_ref']} already paid — "
+                          f"redelivered event {event_id} ignored, stock not moved again")
+                else:
+                    print(f"[stripe] order {order['order_ref']} paid "
+                          f"({(obj.get('amount_total') or 0) / 100:.2f} {obj.get('currency')})")
                 return True
 
             if etype in ("checkout.session.expired", "checkout.session.async_payment_failed"):
