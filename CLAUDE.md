@@ -138,7 +138,7 @@ is authentic and that receipts are provided to buyers after purchase.
 | Footer / vouches | `initVouchFooter` | The site has exactly **one** footer, fixed to the bottom of the viewport, and it *is* the vouch rotator: one buyer quote at a time, swapped every `VOUCH_ROTATE_MS` (4s), with the brand/copyright line beneath. Quotes come verbatim from the Instagram reference post (`VOUCH_POST_URL`) — **never reword one**, since they are other people's words and editing turns a real quote into a fabricated one. Handles are stored **already masked** in `VOUCHES`: masking only at render would still ship the real usernames in the page source, which is not anonymity. The originals are on the public post. Rotation pauses on hover and while the tab is hidden; `body` carries a `padding-bottom` matching the footer height so content never runs underneath it. |
 | Newsletter signup | `initSignup` | Optional `#signup` section near the foot of the page, posting to `/api/subscribe`. **Nothing is gated behind it** — browsing, pricing, cart and checkout all work without it, and a failed POST just says so rather than blocking. Was a full-screen overlay at z-index 1000 that held the store hostage until an email was handed over; the email is now asked for once at checkout, where it is actually needed to send a confirmation. |
 | Cart | `loadCart` / `saveCart` | `localStorage["poc_cart"]` stores `[{name, size, qty}]`; a *line* is a product + chosen size + quantity, keyed by `lineId` (`name__size`), so two sizes of one style are two lines. `addToCart` tops up an existing line rather than refusing it, returning `"added"` / `"topped-up"` / `"maxed"`. The badge counts units, not lines. `loadCart` drops lines whose style or size has since left `PRODUCTS`. |
-| Checkout | `initCheckout` | **Front-end mock — no payment processor.** Card fields are cosmetic; only email/items/total/address are POSTed |
+| Checkout | `initCheckout` | **Reserves stock; no payment processor connected.** There are **no card fields at all** — the inputs and their card-number/expiry/CVC formatters were removed, because formatting a card number implies the site does something with it and it did not. The panel says so to the buyer ("Card payment isn't live yet"): the order is held 30 minutes and settled by DM. Only email/items/subtotal/shipping/total/weight/`ship_to` are POSTed. |
 | My Orders | `initOrders` | Email lookup, no accounts |
 | 3D tilt | `initTilt` | Any element with `class="tilt"` and optional `data-tilt-max` |
 
@@ -427,8 +427,11 @@ Anything real (payments, an admin view, sending mail) needs a proper backend beh
 
 ## Known TODOs
 
-- Payments: checkout is a mock. Card data should never actually be collected until a real processor
-  (Stripe or similar) handles it — don't build a homegrown card-handling path.
+- Payments: no processor is connected, so checkout **reserves** rather than charges — held 30
+  minutes, settled by DM. The card inputs are already gone, so nothing collects card data today;
+  keep it that way until Stripe (or similar) is actually wired up, and don't build a homegrown
+  card-handling path. Claims in the checkout trust strip must stay things the page really does —
+  "Encrypted checkout" was removed for that reason.
 - Resend: `/api/subscribe` has a TODO for the welcome email and drop announcements; account/API key
   not set up yet.
 - **Photo quality and provenance.** The workbook shots max out at ~420px, which is soft for a
