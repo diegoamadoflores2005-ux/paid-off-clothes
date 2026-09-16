@@ -1,171 +1,148 @@
-"""Which carrier quotes are still missing, exactly.
+"""Which carrier quotes are still missing, exactly — and what to type into Pirate Ship.
 
-    python3 tools/shipping_gaps.py                 summary under every zone policy
-    python3 tools/shipping_gaps.py --policy full   the full zone-by-weight grid
-    python3 tools/shipping_gaps.py --policy flat   just the weight ladder
-    python3 tools/shipping_gaps.py --reachable     only weights the catalogue can actually produce
+    python3 tools/shipping_gaps.py              what is filled, what is empty
+    python3 tools/shipping_gaps.py --worklist   the quotes to collect, in the order to collect them
+    python3 tools/shipping_gaps.py --why        why each band is on the list
 
-Reads shipping_rates.json — the verified quotes — and reports the cells with nothing in them.
-It never fills a cell, never interpolates between two quotes, and never reuses a price from one
-zone in another. A quote for 8 oz to one ZIP says nothing about 3 lb, and nothing about a
-different zone; treating it as if it did is how a shop ends up eating postage on every distant
-order.
+Reads shipping_rates.json. It never fills a cell, never interpolates between two quotes, and never
+reuses a price from one zone group in another. A quote for 8 oz to one ZIP says nothing about 3 lb
+and nothing about a different zone; treating it as if it did is how a shop ends up paying postage
+out of its own margin on every distant order.
 """
 import json
 import os
 import sys
-from collections import defaultdict
+import types
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RATES = os.path.join(APP_DIR, "shipping_rates.json")
-PRODUCTS = os.path.join(APP_DIR, "products.json")
+GROUPS = ("near", "mid", "far")
 
-# The ladder the site prices on: everything under a pound is one flat band, then whole pounds.
-BANDS = ["sub"] + [str(lb) for lb in range(1, 17)]
-BAND_LABEL = {"sub": "under 1 lb"}
-
-# USPS zones. 1-8 are distance bands from the origin; 9 covers offshore (AK, HI, territories).
-ZONES = [str(z) for z in range(1, 10)]
-BANDED = {"near (1-4)": ["1", "2", "3", "4"], "mid (5-6)": ["5", "6"], "far (7-9)": ["7", "8", "9"]}
+# Why each band is on the worklist. Written from the catalogue, not guessed — see the notes in
+# STRIPE.md for how these were derived.
+WHY = {
+    "sub": "1 shirt or 1 belt — the single-item order",
+    "2": "2-4 shirts, 2 belts",
+    "3": "5-6 shirts, 1 pair shoes, 1 bag, 3-4 belts",
+    "4": "7-8 shirts, 5-6 belts",
+    "5": "9-10 shirts, 2 bags",
+    "6": "2 pairs shoes, 8 belts",
+    "7": "3 bags, 10 belts",
+    "8": "3 pairs shoes",
+    "9": "20 SHIRTS — the deepest advertised bulk tier. Below this the 20+ price is unshippable.",
+    "11": "4 pairs shoes, 5 bags",
+    "13": "5 pairs shoes, 6 bags",
+    "16": "6 pairs shoes, 8 bags",
+}
 
 
 def band_label(b):
-    return BAND_LABEL.get(b, f"{b} lb")
+    return "under 1 lb" if b == "sub" else f"{b} lb"
 
 
-def load_rates():
+def band_oz(b):
+    return "≤15.99" if b == "sub" else str(int(b) * 16)
+
+
+def load():
     with open(RATES, encoding="utf-8") as fh:
         return json.load(fh)
 
 
-def reachable_bands():
-    """Weights the catalogue can actually produce, so effort goes where orders really land."""
-    import types
-    path = os.path.join(APP_DIR, "db", "orders.py")
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    mod = types.ModuleType("_o")
-    mod.__file__ = path
-    exec(compile(src, path, "exec"), mod.__dict__)
-    W, pack = mod.CATEGORY_WEIGHT_OZ, mod.PACKAGING_OZ
-
-    with open(PRODUCTS, encoding="utf-8") as fh:
-        doc = json.load(fh)
-    stock = defaultdict(int)
-    for p in doc["products"]:
-        stock[p["category"]] += sum(s["qty"] for s in p["sizes"])
-
-    hits = {}
-    for cat, units in stock.items():
-        if not units or cat not in W:
-            continue
-        for n in range(1, min(units, 8) + 1):
-            oz = W[cat] * n + pack
-            band = "sub" if oz <= 15.99 else str(min(16, -(-int(oz) // 16)))
-            hits.setdefault(band, []).append(f"{n}x {cat.lower()}")
-    return hits
-
-
-def verified_cells(rates):
-    """(band, zone) -> quote. A quote with no zone cannot fill a cell in a zoned policy."""
-    cells, unzoned = {}, []
-    for q in rates.get("quotes", []):
-        band = str(q.get("band"))
-        zone = q.get("zone")
-        if zone is None:
-            unzoned.append(q)
-        else:
-            cells[(band, str(zone))] = q
-    return cells, unzoned
+def cells(rates):
+    """Every cell in the table as (section, band, group, price)."""
+    out = []
+    table = rates.get("rate_table", {})
+    for section in ("core", "heavy"):
+        for band, row in table.get(section, {}).items():
+            for g in GROUPS:
+                out.append((section, band, g, row.get(g)))
+    for g in GROUPS:
+        out.append(("over_max", "over", g, table.get("over_max", {}).get(g)))
+    return out
 
 
 def main():
     args = sys.argv[1:]
-    policy = None
-    if "--policy" in args:
-        policy = args[args.index("--policy") + 1]
-    only_reachable = "--reachable" in args
-
-    rates = load_rates()
-    cells, unzoned = verified_cells(rates)
+    rates = load()
     origin = rates.get("origin_zip")
-    reach = reachable_bands()
-    bands = [b for b in BANDS if b in reach] if only_reachable else BANDS
+    policy = rates.get("zone_policy")
+    all_cells = cells(rates)
+    filled = [c for c in all_cells if c[3] is not None]
+    empty = [c for c in all_cells if c[3] is None]
 
-    print("Shipping quotes — what is verified and what is missing")
-    print("=" * 70)
+    print("Shipping quotes — Paid Off Clothes")
+    print("=" * 72)
     print(f"carrier     : {rates.get('carrier')}")
-    print(f"origin ZIP  : {origin or 'NOT SET — no destination can be mapped to a zone without it'}")
-    print(f"zone policy : {rates.get('zone_policy')}")
-    print(f"quotes held : {len(rates.get('quotes', []))}")
-    if unzoned:
-        print()
-        for q in unzoned:
-            print(f"  unusable as a zone cell: ${q['price_usd']:.2f} at {q['oz']} oz to "
-                  f"{q['dest_zip']} — zone unknown"
-                  + ("" if q.get("weighed") else ", and the weight was estimated not weighed"))
+    print(f"origin ZIP  : {origin or 'NOT SET'}")
+    print(f"zone policy : {policy}")
+    for g in GROUPS:
+        zs = rates.get("zone_groups", {}).get(g, {})
+        print(f"  {g:<5} zones {', '.join(map(str, zs.get('zones', []))):<10} {zs.get('note','')}")
     print()
 
-    if policy in (None, "flat"):
-        print("POLICY 'flat' — one price per weight band, every destination")
-        print("-" * 70)
-        have = {b for (b, _z) in cells} | ({q["band"] for q in unzoned} if False else set())
-        missing = [b for b in bands if b not in have]
-        print(f"  need {len(bands)} quotes, hold 0, missing {len(missing)}")
-        print("  A flat table cannot be right for more than one lane — it is what the site does")
-        print("  today, and why a 90210 order and a next-town order pay the same.")
-        if policy == "flat":
-            for b in missing:
-                why = f"   ({', '.join(sorted(set(reach.get(b, [])))[:3])})" if b in reach else ""
-                print(f"    missing: {band_label(b):>11}{why}")
+    ref = [q for q in rates.get("quotes", []) if q.get("use") == "reference only"]
+    if ref:
+        print("Held as reference, deliberately not in the table:")
+        for q in ref:
+            zone = (f"zone {q['zone_inferred']} inferred, UNCONFIRMED"
+                    if q.get("zone_inferred") and not q.get("zone_verified") else "zone unknown")
+            weighed = "weighed" if q.get("weighed") else "weight ESTIMATED, not weighed"
+            print(f"  ${q['price_usd']:.2f} at {q['oz']} oz to {q['dest_zip']} — {zone}; {weighed}")
         print()
 
-    if policy in (None, "banded"):
-        print("POLICY 'banded' — near (1-4) / mid (5-6) / far (7-9)")
-        print("-" * 70)
-        need = len(bands) * len(BANDED)
-        held = sum(1 for (b, z) in cells if b in bands)
-        print(f"  need {need} quotes ({len(bands)} weights x {len(BANDED)} groups), "
-              f"hold {held}, missing {need - held}")
-        print("  Three quotes per weight instead of nine. Loses accuracy inside each group:")
-        print("  a zone-1 buyer subsidises a zone-4 one.")
-        if policy == "banded":
-            for b in bands:
-                gaps = [g for g, zs in BANDED.items() if not any((b, z) in cells for z in zs)]
-                if gaps:
-                    print(f"    {band_label(b):>11}: {', '.join(gaps)}")
-        print()
+    print(f"cells filled : {len(filled)} of {len(all_cells)}")
+    print(f"cells empty  : {len(empty)}")
+    print()
 
-    if policy in (None, "full"):
-        print("POLICY 'full' — a price per weight band per zone 1-9")
-        print("-" * 70)
-        need = len(bands) * len(ZONES)
-        held = sum(1 for (b, z) in cells if b in bands)
-        print(f"  need {need} quotes ({len(bands)} weights x {len(ZONES)} zones), "
-              f"hold {held}, missing {need - held}")
-        if policy == "full":
-            print()
-            print("  " + "band".ljust(12) + "".join(f"z{z}".rjust(7) for z in ZONES))
-            for b in bands:
-                row = "  " + band_label(b).ljust(12)
-                for z in ZONES:
-                    q = cells.get((b, z))
-                    row += (f"{q['price_usd']:.2f}".rjust(7) if q else "  —".rjust(7))
-                print(row)
-            print("\n  — = no quote. Nothing is inferred from a neighbouring cell.")
-        print()
+    # the grid
+    table = rates.get("rate_table", {})
+    print("  " + "band".ljust(13) + "oz".rjust(7) + "".join(g.rjust(9) for g in GROUPS))
+    for section in ("core", "heavy"):
+        for band, row in table.get(section, {}).items():
+            line = "  " + band_label(band).ljust(13) + band_oz(band).rjust(7)
+            for g in GROUPS:
+                v = row.get(g)
+                line += (f"{v:.2f}".rjust(9) if v is not None else "—".rjust(9))
+            print(line + ("" if section == "core" else "   (heavy)"))
+    line = "  " + "over top".ljust(13) + "—".rjust(7)
+    for g in GROUPS:
+        v = table.get("over_max", {}).get(g)
+        line += (f"{v:.2f}".rjust(9) if v is not None else "—".rjust(9))
+    print(line + "   (fallback)")
+    print("\n  — = no quote. Nothing is inferred from a neighbouring cell.")
 
-    if only_reachable:
-        print("Weights the catalogue can actually produce")
-        print("-" * 70)
-        for b in bands:
-            print(f"  {band_label(b):>11}  {', '.join(sorted(set(reach[b]))[:5])}")
+    if "--worklist" in args or "--why" in args:
         print()
+        print("Worklist — one Pirate Ship quote per line")
+        print("-" * 72)
+        print(f"Set origin to {origin}. For each group pick ONE destination, read the zone Pirate")
+        print("Ship prints, and use that same destination for every weight in the group.")
+        print()
+        n = 0
+        for section in ("core", "heavy"):
+            if section == "heavy":
+                print("\n  --- heavy: bulk shoes and bags only. Skip if you cap those orders. ---")
+            for band in table.get(section, {}):
+                missing = [g for g in GROUPS if table[section][band].get(g) is None]
+                if not missing:
+                    continue
+                n += len(missing)
+                why = f"   {WHY.get(band, '')}" if "--why" in args else ""
+                print(f"  {band_label(band):<12} at {band_oz(band):>6} oz   -> {', '.join(missing)}{why}")
+        over_missing = [g for g in GROUPS if table.get("over_max", {}).get(g) is None]
+        if over_missing:
+            n += len(over_missing)
+            print(f"\n  {'over top band':<12}            -> {', '.join(over_missing)}"
+                  + ("   quote the heaviest order you will accept; this covers everything above"
+                     if "--why" in args else ""))
+        print(f"\n  {n} quotes to collect.")
 
-    print("=" * 70)
-    if not origin:
-        print("BLOCKED: set origin_zip in shipping_rates.json first. Until then even the quote")
-        print("already on file cannot be assigned to a zone, so no policy can be filled in.")
+    print()
+    print("=" * 72)
+    if empty:
+        print("Nothing drives the site from this file yet — the flat ladder is still live.")
+        print("Enter quotes, then run: python3 tools/apply_shipping_rates.py")
     return 0
 
 

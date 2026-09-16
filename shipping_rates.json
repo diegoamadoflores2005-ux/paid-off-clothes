@@ -26,17 +26,14 @@
     "  collected     when it was taken. Carrier rates change; a stale quote is not a verified one.",
     "  source        where it came from."
   ],
-
   "carrier": "USPS Ground Advantage",
-  "origin_zip": null,
-  "zone_policy": "undecided",
-
+  "origin_zip": "85641",
+  "zone_policy": "banded",
   "_zone_policy_options": {
     "flat": "One price per weight band for every destination. What the site does today. Simplest, and wrong at both ends of the country.",
     "banded": "Group zones — e.g. near (1-4), mid (5-6), far (7-9). Three quotes per weight instead of nine.",
     "full": "A price per weight band per zone 1-9. Most accurate, most quotes to collect."
   },
-
   "quotes": [
     {
       "price_usd": 5.82,
@@ -49,12 +46,117 @@
       "collected": "2026-09-16",
       "source": "Pirate Ship calculator, sample quote supplied by owner",
       "notes": [
-        "The only verified quote on file.",
-        "zone is null because origin_zip is unknown — 90210 alone does not determine a zone.",
-        "weighed is false: the 8 oz was an estimate, so this cell is provisional.",
-        "For comparison the site currently charges $5.50 flat for anything under 1 lb, so this",
-        "lane is about $0.32 under-quoted — one data point, not a pattern."
-      ]
+        "REFERENCE ONLY, by the owner's instruction. Not applied to any band.",
+        "Two things keep it out of the table: the zone is inferred and unconfirmed, and the 8 oz was",
+        "estimated rather than weighed.",
+        "Pirate Ship shows the zone on the quote screen — confirm it there and set zone_verified.",
+        "For comparison the site charges $5.50 flat under 1 lb, so this lane looks ~$0.32 low."
+      ],
+      "zone_inferred": 4,
+      "zone_inference_basis": "85641 -> 90210 is about 450 miles, and USPS zone 4 covers 301-600 miles. Distance is how zones are broadly set, but the published chart is by ZIP prefix pair and is authoritative.",
+      "zone_verified": false,
+      "group_if_confirmed": "near",
+      "use": "reference only"
     }
-  ]
+  ],
+  "origin_note": "Vail, AZ. The ONLY place an origin belongs: shipping_cents() in db/orders.py and shippingFor() in script.js take weight and nothing else, so writing 85641 into either would be decoration, not configuration. When the zone engine is built it reads the origin from here.",
+  "zone_groups": {
+    "near": {
+      "zones": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "note": "roughly AZ, NM, SoCal, NV, UT, west TX from 85641"
+    },
+    "mid": {
+      "zones": [
+        5,
+        6
+      ],
+      "note": "roughly the mountain west, plains, central states"
+    },
+    "far": {
+      "zones": [
+        7,
+        8,
+        9
+      ],
+      "note": "roughly the east coast, upper midwest, and AK/HI/territories"
+    }
+  },
+  "_zone_group_warning": "Those geographies are a STARTING POINT for choosing a destination to quote, not a zone chart. Pirate Ship prints the actual zone on every quote — read it there and record it, rather than trusting the description.",
+  "rate_table": {
+    "_note": "null means no quote yet. Nothing here is inferred from a neighbouring cell, and no cell is filled by interpolation. 1 lb is absent on purpose: no basket of 7/10/32/40 oz goods plus 3 oz packaging weighs exactly 16 oz, so that band is unreachable.",
+    "core": {
+      "sub": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "2": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "3": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "4": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "5": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "6": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "7": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "8": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "9": {
+        "near": null,
+        "mid": null,
+        "far": null
+      }
+    },
+    "heavy": {
+      "11": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "13": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
+      "16": {
+        "near": null,
+        "mid": null,
+        "far": null
+      }
+    },
+    "over_max": {
+      "near": null,
+      "mid": null,
+      "far": null
+    }
+  }
 }
