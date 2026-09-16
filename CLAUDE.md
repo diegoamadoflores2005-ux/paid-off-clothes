@@ -24,7 +24,7 @@ python3 server.py
 ```
 
 Serves on http://localhost:8000. Opening `index.html` directly via `file://` works for browsing but
-breaks the API-backed features (bids, orders, click stats, email gate submit).
+breaks the API-backed features (bids, orders, click stats, newsletter signup submit).
 
 The server sends `Cache-Control: no-store` on everything. Separately, `index.html` links assets with
 a manual cache-busting query (`styles.css?v=2`, `script.js?v=2`) for deployed hosts — **bump both
@@ -131,12 +131,12 @@ is authentic and that receipts are provided to buyers after purchase.
 
 | Feature | JS | Notes |
 |---|---|---|
-| Opening logo reveal | `initIntro` | Full-screen `#intro` at z-index 2000, above the gate's 1000, so it plays before anything is reachable. ~3.3s: the logo spins two full turns on Y while scaling up (2100ms), a viewport-wide shine sweeps across at 950ms, the overlay fades at 2600ms. Behind it sits a city backdrop — two `images/skyline.png` bands tiled `repeat-x` at different scales, opacities and drift speeds for parallax depth, over a blue-lifted night gradient with a horizon glow. Dismissed by the Skip button, a click anywhere, or Esc/Space/Enter. `animationend` unmounts it, with a 4200ms `setTimeout` guard because a backgrounded tab never fires it. Set `INTRO_ONCE_PER_SESSION = true` to play only once per session instead of every load. |
-| Email gate | `initGate` | Full-screen overlay blocking the site until an email is captured; `localStorage["poc_gate_passed"]` |
+| Opening logo reveal | `initIntro` | Full-screen `#intro` at z-index 2000, above every other layer on the page (grain 999, header 100), so it plays before anything is reachable. ~3.3s: the logo spins two full turns on Y while scaling up (2100ms), a viewport-wide shine sweeps across at 950ms, the overlay fades at 2600ms. Behind it sits a city backdrop — two `images/skyline.png` bands tiled `repeat-x` at different scales, opacities and drift speeds for parallax depth, over a blue-lifted night gradient with a horizon glow. Dismissed by the Skip button, a click anywhere, or Esc/Space/Enter. `animationend` unmounts it, with a 4200ms `setTimeout` guard because a backgrounded tab never fires it. Set `INTRO_ONCE_PER_SESSION = true` to play only once per session instead of every load. |
 | Featured picks stack | `renderFeatured` / `initStack` | Top 4 items ranked by real visitor clicks, falling back to `DEFAULT_FEATURED_ORDER` |
 | Bid of the Week | `renderBidCard` / `refreshBidState` | Auto-rotates weekly via ISO week number — no manual curation. Refreshes on load and on `visibilitychange`, **never on a timer** — see below |
 | Catalog | `renderProducts` / `getFilteredProducts` | Category tiles, search, price range, size chips, in-stock toggle, sort |
 | Footer / vouches | `initVouchFooter` | The site has exactly **one** footer, fixed to the bottom of the viewport, and it *is* the vouch rotator: one buyer quote at a time, swapped every `VOUCH_ROTATE_MS` (4s), with the brand/copyright line beneath. Quotes come verbatim from the Instagram reference post (`VOUCH_POST_URL`) — **never reword one**, since they are other people's words and editing turns a real quote into a fabricated one. Handles are stored **already masked** in `VOUCHES`: masking only at render would still ship the real usernames in the page source, which is not anonymity. The originals are on the public post. Rotation pauses on hover and while the tab is hidden; `body` carries a `padding-bottom` matching the footer height so content never runs underneath it. |
+| Newsletter signup | `initSignup` | Optional `#signup` section near the foot of the page, posting to `/api/subscribe`. **Nothing is gated behind it** — browsing, pricing, cart and checkout all work without it, and a failed POST just says so rather than blocking. Was a full-screen overlay at z-index 1000 that held the store hostage until an email was handed over; the email is now asked for once at checkout, where it is actually needed to send a confirmation. |
 | Cart | `loadCart` / `saveCart` | `localStorage["poc_cart"]` stores `[{name, size, qty}]`; a *line* is a product + chosen size + quantity, keyed by `lineId` (`name__size`), so two sizes of one style are two lines. `addToCart` tops up an existing line rather than refusing it, returning `"added"` / `"topped-up"` / `"maxed"`. The badge counts units, not lines. `loadCart` drops lines whose style or size has since left `PRODUCTS`. |
 | Checkout | `initCheckout` | **Front-end mock — no payment processor.** Card fields are cosmetic; only email/items/total/address are POSTed |
 | My Orders | `initOrders` | Email lookup, no accounts |
@@ -420,7 +420,7 @@ files in the repo root (`clicks.json`, `bids.json`, `orders.json`, `subscribers.
 - `GET  /api/bid?item=` / `POST /api/bid` — `{item, amount, name}`, rejects bids at or below current
 - `GET  /api/orders?email=` / `POST /api/order` — `{email, items, subtotal, shipping, total, weight_oz, ship_to}`, where `ship_to` is `{name, address1, address2, city, state, zip, country}` split into separate fields so the label CSV can map them
 - `GET  /api/labels.csv[?unshipped=1]` — Pirate Ship bulk-upload spreadsheet
-- `POST /api/subscribe` — `{email}`, email-gate signups
+- `POST /api/subscribe` — `{email}`, newsletter signups from the `#signup` section
 
 This is a dev-grade backend: flat files, no auth, no validation beyond the basics, single process.
 Anything real (payments, an admin view, sending mail) needs a proper backend behind it.
