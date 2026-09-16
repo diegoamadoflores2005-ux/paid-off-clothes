@@ -171,8 +171,17 @@ That is not theoretical. Ordinary baskets land there:
 A buyer with twelve shirts is quoted the ten-pound rate. Nothing is *lost* — the overcharge lands
 on the customer, not the shop — but it is the kind of number that loses a bulk sale.
 
-**Worksheet.** Get one quote per row from Pirate Ship for your most common destination zone, then
-fill in every band including the five that do not exist yet:
+**Worksheet.** There is an interactive version of the table below — enter each quote and it writes
+both code blocks and the test constant, flags a heavier band priced cheaper than a lighter one, and
+shows what real baskets would cost before and after:
+
+> https://claude.ai/artifact/9N39Q8hpTPjEoHLYfWvYgL
+>
+> Private to the repo owner's Claude account, so this link does nothing for anyone else — the table
+> below is the copy that travels with the repo, and is the one to keep current.
+
+Get one quote per row from Pirate Ship for your most common destination zone, then fill in every
+band including the five that do not exist yet:
 
 | Weight up to | oz | Current | Real quote | Reached by |
 |---|---|---|---|---|
