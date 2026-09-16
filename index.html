@@ -273,8 +273,8 @@
     <button type="button" class="modal-close" id="checkout-close" aria-label="Close">&times;</button>
 
     <div class="checkout-body" id="checkout-form-view">
-      <p class="eyebrow">Secure Checkout</p>
-      <h3>Complete Your Order</h3>
+      <p class="eyebrow">Reserve Your Order</p>
+      <h3>Lock In Your Pieces</h3>
 
       <div class="checkout-items" id="checkout-items">
         <!-- line items injected by script.js -->
@@ -295,8 +295,11 @@
         <span class="price" id="checkout-total-price"></span>
       </div>
 
+      <!-- Claims here have to be things the page actually does. "Encrypted checkout" was not one:
+           no payment is taken and no card data is in flight, so there is nothing being encrypted
+           beyond ordinary HTTPS — and over the dev server's plain http:// not even that. -->
       <ul class="checkout-trust">
-        <li>Encrypted checkout</li>
+        <li>No card details collected</li>
         <li>Ships within 48hrs</li>
         <li>DM-verified seller</li>
       </ul>
