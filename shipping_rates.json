@@ -1,0 +1,60 @@
+{
+  "_README": [
+    "VERIFIED CARRIER QUOTES. One entry per quote actually obtained from Pirate Ship — never an",
+    "estimate, never an interpolation, never a number carried over from a different lane.",
+    "",
+    "This file does NOT drive the site yet. script.js and db/orders.py still use the flat",
+    "SHIPPING_TIERS ladder. Switching the code to read zone-aware rates is blocked on two things",
+    "only the owner can settle: the origin ZIP (without it a destination cannot be mapped to a",
+    "zone at all) and the cart-versus-charge decision in STRIPE.md. Until then this file is the",
+    "place verified quotes accumulate so none is lost or quietly generalised.",
+    "",
+    "Ground Advantage is priced on TWO axes: billable weight (rounded up to the pound above 1 lb)",
+    "and zone (distance from origin to destination). One quote fills exactly one cell. A quote for",
+    "8 oz to one ZIP says nothing about 3 lb, and nothing about a different zone.",
+    "",
+    "Fields on each quote:",
+    "  price_usd     what Pirate Ship quoted, exactly as shown",
+    "  oz            the weight entered to get that quote",
+    "  band          which ladder band that weight falls in ('sub' = under 1 lb, else the pound)",
+    "  dest_zip      the destination entered",
+    "  zone          the USPS zone that origin->dest resolves to; null until origin_zip is known",
+    "  weighed       true only if the parcel was on a scale. false means the weight was estimated,",
+    "                which makes the quote provisional: the real parcel may bill in another band.",
+    "  dims_in       box dimensions used, if any. Ground Advantage applies dimensional weight to",
+    "                large-but-light parcels, so a quote taken without dims can be low.",
+    "  collected     when it was taken. Carrier rates change; a stale quote is not a verified one.",
+    "  source        where it came from."
+  ],
+
+  "carrier": "USPS Ground Advantage",
+  "origin_zip": null,
+  "zone_policy": "undecided",
+
+  "_zone_policy_options": {
+    "flat": "One price per weight band for every destination. What the site does today. Simplest, and wrong at both ends of the country.",
+    "banded": "Group zones — e.g. near (1-4), mid (5-6), far (7-9). Three quotes per weight instead of nine.",
+    "full": "A price per weight band per zone 1-9. Most accurate, most quotes to collect."
+  },
+
+  "quotes": [
+    {
+      "price_usd": 5.82,
+      "oz": 8,
+      "band": "sub",
+      "dest_zip": "90210",
+      "zone": null,
+      "weighed": false,
+      "dims_in": null,
+      "collected": "2026-09-16",
+      "source": "Pirate Ship calculator, sample quote supplied by owner",
+      "notes": [
+        "The only verified quote on file.",
+        "zone is null because origin_zip is unknown — 90210 alone does not determine a zone.",
+        "weighed is false: the 8 oz was an estimate, so this cell is provisional.",
+        "For comparison the site currently charges $5.50 flat for anything under 1 lb, so this",
+        "lane is about $0.32 under-quoted — one data point, not a pattern."
+      ]
+    }
+  ]
+}

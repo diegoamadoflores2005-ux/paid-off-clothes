@@ -241,6 +241,32 @@ than a silent pass — closing the gap should be written down, not just done.
 The category weights are still estimates too. Put one of each on a kitchen scale before real money
 moves — postage bills on what the parcel actually weighs, not on this table.
 
+## Zone pricing: the decision that blocks it
+
+Ground Advantage is priced on **two** axes — billable weight and zone — but `shippingFor(lines)`
+and `shipping_cents(lines)` both take only weight. Making rates zone-aware runs into where the
+figures appear:
+
+- `index.html:404` shows a shipping figure **in the cart**, where no address has been given.
+- `index.html:355` is the ZIP field, **in the checkout panel**, after that.
+
+So the cart cannot know the zone. Three ways out, and it is the owner's call:
+
+1. **Cart shows an estimate, checkout charges the real rate.** The cart says "from $X" or quotes
+   the dearest zone, clearly labelled; the checkout panel and the Stripe session both compute the
+   real zone rate from the entered ZIP and therefore still match each other exactly. Recommended —
+   the charged figure stays single-sourced, which is what parity actually requires.
+2. **Ask for a ZIP in the cart.** Accurate everywhere, one more field before anyone has decided to
+   buy.
+3. **Stay flat.** What the site does today. Simple, and wrong at both ends of the country.
+
+Whichever is chosen, the rule that must not break: **the checkout panel and the Stripe session are
+computed from the same figure.** They are today — both come from `orders.quote()` — and a zone
+engine must keep it that way, or the page shows one number and the card is charged another.
+
+`shipping_rates.json` holds the verified quotes; `python3 tools/shipping_gaps.py` says what is
+still missing. Nothing in that file drives the site yet.
+
 ## Going live
 
 **Not yet — this needs the owner's say-so, and a deploy.** When that day comes:
