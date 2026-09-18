@@ -109,6 +109,11 @@ const CATEGORY_WEIGHT_OZ = {
   Tracksuits: 28,
 };
 
+// Mirrors DEFAULT_WEIGHT_OZ in db/orders.py. Named rather than inlined so the parity test can
+// find it: the two files drifting apart on a weight is exactly the bug that billed every bag at
+// 8 oz instead of 32, and an unnamed literal is invisible to the check that now catches it.
+const DEFAULT_WEIGHT_OZ = 8;
+
 const PACKAGING_OZ = 3; // mailer / box / padding added once per order
 
 // USPS Ground Advantage tiers, cheapest first; the first tier the order fits under wins.
@@ -130,7 +135,7 @@ const SHIPPING_TIERS = [
 const SHIPPING_OVER_MAX = 22; // anything heavier than the last tier
 
 function weightOf(p) {
-  return p.weightOz ?? CATEGORY_WEIGHT_OZ[p.category] ?? 8;
+  return p.weightOz ?? CATEGORY_WEIGHT_OZ[p.category] ?? DEFAULT_WEIGHT_OZ;
 }
 
 // Total billable weight for an order: every unit, plus packaging once.

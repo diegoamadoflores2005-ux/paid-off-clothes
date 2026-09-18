@@ -73,33 +73,67 @@ both and compare. If Shippo is within a few cents, the automation is worth it. I
 meaningfully cheaper on the bands this shop actually ships, the discount may be worth more than the
 table costs to maintain.
 
-## Cubic changes this argument
+## Cubic changes this argument — and then settles it
 
-Every quote collected so far assumed postage is a function of weight. It isn't, for this inventory:
-USPS Ground Advantage Cubic is priced on the box's volume and is flat across weight up to 20 lb, and
-Pirate Ship rate shops it against weight-based automatically. That is where the $5.93-at-3-4-and-5-lb
-figures came from.
+Every quote collected up to this point assumed postage is a function of weight. For this inventory
+it isn't, and the screenshots prove it rather than suggesting it:
 
-If cubic is the cheaper product for these parcels — and at 0.4 cu ft it appears to be by a wide
-margin — then **a weight-indexed table is the wrong shape regardless of who fills it in**. Price
-follows the box. Two orders of identical weight in different boxes cost different amounts, and the
-current model has no dimension input at all: `orderWeightOz(lines)` returns ounces and nothing else.
+| Weight | Service Pirate Ship showed | Price |
+|---|---|---|
+| 3–5 lb | USPS Ground Advantage (weight-based) | $5.93 |
+| 6–9 lb | USPS Ground Advantage **Cubic** | $8.56 |
 
-Expressing cubic by hand means either committing to a fixed box per order profile (so volume becomes
-a constant and the table works again), or adding a packing model that picks a box from the basket.
-An API sidesteps it: send the real dimensions, get the real cheapest rate, including cubic.
+Same 12 × 19 × 3 box throughout. Cubic ignores weight entirely, so for that box Cubic is $8.56 at
+*every* weight in the table. Pirate Ship rate shops the two and displays the winner, so what the
+screen shows is `min(weight_based(lb), cubic(box))` — weight-based wins while it is under $8.56, and
+Cubic wins once it is over. **The crossover sits between 5 and 6 lb.**
 
-**This is the strongest argument for the API, and it is an argument that only appeared because the
-manual quotes were collected carefully enough to contradict each other.**
+That is the shop's real cost model. It is not one service, and no single-service table can express
+it.
 
-## Recommendation
+But notice what it *is*: for a fixed box, `min(weight_based(lb), cubic(box))` is still a function of
+weight alone. The box is the only other variable, and it is one the shop controls.
 
-1. **Do not collect the other 37 quotes yet.** They would be quotes for a weight model that may be
-   the wrong model.
-2. **Settle the packaging question first.** What boxes and mailers does this shop actually use? That
-   single answer decides whether cubic applies, and therefore whether a weight table can work at all.
-3. **Then compare Shippo against Pirate Ship on the same parcel**, once, before committing either
-   way. Automation that quotes the wrong price is worse than a table that quotes the right one.
+## Recommendation: fix the box, keep the table, skip the API
+
+**Do not build a Shippo integration.** There is no existing one — the repo has zero references to
+Shippo, EasyPost or any carrier API, so this would be new code, a new account, a new key to keep out
+of git, and a per-rate charge on a debounced ZIP field. And it would still quote rates the shop
+doesn't pay, because labels are bought on Pirate Ship.
+
+Instead, make the table say what it actually holds:
+
+1. **Pick one standard package** and measure it. One poly mailer for small orders, one box for
+   everything else, if two are genuinely needed — but each one is a fixed, measured size, not an
+   estimate typed in per quote.
+2. **Set `rate_basis` to `cheapest_available`** and declare that package in `quoted_for_package`.
+   The code now enforces this: a rate-shopped table refuses to switch on without measured
+   dimensions, and refuses any cell quoted for a different box.
+3. **Fill each cell with whatever Pirate Ship shows as cheapest** for that package at that weight —
+   Cubic or weight-based, whichever wins. No reinterpretation, no judgement call: copy the number on
+   the screen and record which service it came from.
+
+Why this beats the API for this shop:
+
+- **Quote equals cost by construction.** Same provider, same package, same rate shopping.
+- **No new dependency, no key, no per-call billing.** The zero-dependency promise holds.
+- **Fewer quotes than feared.** Once Cubic caps the ladder, every band above the crossover is the
+  same number. One quote covers the whole plateau per zone group, so the upper half of the table
+  fills itself.
+- **It is already built.** The table, the zone map, the validators and the all-or-nothing gate all
+  exist and are tested.
+
+The API becomes the right answer only if the shop stops using a standard package — if box size
+varies per order, volume stops being a constant, and nothing but a live lookup can price it.
+
+## What is still true about the providers
+
+Pirate Ship has no rating API, so "integrate Pirate Ship" is not an option that exists. Shippo has
+one at 1¢ per rate and 7¢ per label after 30 free per month, and it fits the urllib pattern — but
+its rates are its own, not the USPS Connect eCommerce tier Pirate Ship bills at. Quoting on Shippo
+while buying on Pirate Ship reintroduces the displayed-versus-charged drift this codebase refuses
+everywhere else, with a company boundary through the middle of it. If the API route is ever taken,
+labels move to the same provider or it isn't worth taking.
 
 Nothing here is wired up. `shipping_rates.json` still drives nothing — `zone_pricing_ready()` is
 false and the flat estimate ladder in `script.js` and `db/orders.py` is what the site uses.

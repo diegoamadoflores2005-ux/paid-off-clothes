@@ -386,11 +386,18 @@ destination's first three digits. USPS publishes the chart per origin; mileage o
 it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
 neighbouring zone's price.
 
-**Rate table or rate API?** [SHIPPING.md](SHIPPING.md) has the worked answer. In short: Pirate Ship
-has no rating API, Shippo does and fits the urllib pattern at 1¢ per rate — but Shippo's rates are
-not Pirate Ship's, so quoting on one and buying labels on the other reintroduces the displayed-versus-
-charged drift this codebase refuses everywhere else. Quote and buy on the same provider, or keep both
-on Pirate Ship.
+**Rate table or rate API?** [SHIPPING.md](SHIPPING.md) has the worked answer: **keep the table, fix
+the box, skip the API.** There is no Shippo integration in this repo and there should not be one yet.
+Pirate Ship rate shops weight-based Ground Advantage against Cubic and sells the winner, so the
+shop's real cost is `min(weight_based(lb), cubic(box))` — confirmed on screen, weight-based at 3–5 lb
+and Cubic from 6 lb up in the same box. For a **fixed** package that is still a function of weight
+alone, which is exactly what the existing table indexes on. So `rate_basis` becomes
+`cheapest_available`, `quoted_for_package` names one measured box, and each cell holds whichever
+service Pirate Ship showed cheapest — quote equals cost by construction, with no key, no dependency
+and no per-call billing. `package_problem()` refuses a rate-shopped table with estimated or missing
+dimensions, and `unverified_cells()` refuses a cell quoted for a different box. Shippo only becomes
+right if box size stops being standard; and if it is ever adopted, labels move there too, or the
+quote and the charge drift apart across a company boundary.
 
 ## Shipping labels (Pirate Ship)
 

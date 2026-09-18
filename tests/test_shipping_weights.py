@@ -143,6 +143,16 @@ class TestShippingWeights(unittest.TestCase):
             self.assertIsInstance(oz, (int, float), cat)
             self.assertGreater(oz, 0, cat)
 
+    def test_the_fallback_weight_agrees_across_the_two_files(self):
+        """The default applies to any category with no entry, so a drift here is silent by design."""
+        import re
+        orders = load_orders()
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        m = re.search(r"const DEFAULT_WEIGHT_OZ = ([0-9.]+)", src)
+        self.assertIsNotNone(m, "DEFAULT_WEIGHT_OZ not found in script.js — inline it and this "
+                                "check goes blind, which is how the bag weight drifted before")
+        self.assertEqual(float(m.group(1)), float(orders.DEFAULT_WEIGHT_OZ))
+
     def test_bags_are_not_billed_as_light_goods(self):
         """The specific regression: a bag at the 8 oz default is a 24 oz undercharge every time."""
         orders = load_orders()
@@ -465,6 +475,81 @@ class TestZonePricing(unittest.TestCase):
         rates["cell_provenance"]["core.2.near"]["verified"] = False
         orders = self._with_rates(rates)
         self.assertFalse(orders.zone_pricing_ready())
+
+    # ---- the rate-shopped table ----------------------------------------------------------------
+    # Pirate Ship rate shops weight-based Ground Advantage against Ground Advantage Cubic and shows
+    # whichever wins, so a shop that buys the cheapest line on the screen is not on one service. A
+    # table can model that honestly, but only for a package it names: Cubic is charged on volume, so
+    # the moment the box changes, half the ladder is for a different box.
+    BOX = [12, 19, 3]
+
+    def _shopped_table(self):
+        rates = self._full_table()
+        rates["rate_basis"] = "cheapest_available"
+        rates["rate_shopped_services"] = ["Ground Advantage", "Ground Advantage Cubic"]
+        rates["quoted_for_package"] = {"dims_in": self.BOX, "verified": True}
+        for entry in rates["cell_provenance"].values():
+            entry["rate_basis"] = "cheapest_available"
+            entry["dims_in"] = self.BOX
+        return rates
+
+    def test_a_rate_shopped_table_may_hold_a_cubic_price(self):
+        """The 6-9 lb rows really are Cubic. A table that says so is allowed to carry them."""
+        rates = self._shopped_table()
+        rates["cell_provenance"]["core.8.near"]["service"] = "Ground Advantage Cubic"
+        orders = self._with_rates(rates)
+        self.assertEqual(orders.unverified_cells(rates), [])
+        self.assertTrue(orders.zone_pricing_ready())
+
+    def test_a_rate_shopped_table_without_a_package_cannot_switch_on(self):
+        rates = self._shopped_table()
+        del rates["quoted_for_package"]
+        orders = self._with_rates(rates)
+        self.assertIn("quoted_for_package", orders.package_problem(rates))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_an_estimated_package_cannot_switch_on(self):
+        """'I think the mailer is about 12x19x3' is not a measurement, and Cubic bills on it."""
+        rates = self._shopped_table()
+        rates["quoted_for_package"]["verified"] = False
+        orders = self._with_rates(rates)
+        self.assertIsNotNone(orders.package_problem(rates))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_cell_quoted_for_a_different_box_is_rejected(self):
+        rates = self._shopped_table()
+        rates["cell_provenance"]["core.5.near"]["dims_in"] = [12, 9, 3]
+        orders = self._with_rates(rates)
+        self.assertTrue(any(cell == "core.5.near" for cell, _w in orders.unverified_cells(rates)))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_weight_table_still_refuses_cubic(self):
+        """The default basis is unchanged: one service, and Cubic is not it."""
+        rates = self._full_table()
+        rates["cell_provenance"]["core.4.near"]["service"] = "Ground Advantage Cubic"
+        orders = self._with_rates(rates)
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_flat_run_of_bands_is_allowed_once_cubic_caps_the_ladder(self):
+        """Cubic is flat across weight, so a rate-shopped ladder legitimately plateaus.
+
+        Monotonicity must stay a >= check, not a > one, or the correct shape gets rejected.
+        """
+        rates = self._shopped_table()
+        # The cap has to sit at or above the last weight-based band — which is how the real numbers
+        # came in, $8.56 of Cubic above $5.93 of weight-based. A plateau BELOW the band before it is
+        # still a fault, and the guard says so.
+        cap = rates["rate_table"]["core"]["5"]["near"] + 0.5
+        for band in ("6", "7", "8", "9"):
+            rates["rate_table"]["core"][band]["near"] = cap
+            rates["cell_provenance"][f"core.{band}.near"]["service"] = "Ground Advantage Cubic"
+        orders = self._with_rates(rates)
+        self.assertEqual([p for p in orders.rate_table_problems(rates) if "near:" in p], [],
+                         "a flat run is legitimate once Cubic caps the ladder")
+
+        rates["rate_table"]["core"]["6"]["near"] = 1.00
+        self.assertTrue([p for p in orders.rate_table_problems(rates) if "near:" in p],
+                        "a plateau that DROPS below the band before it is still a fault")
 
 
 if __name__ == "__main__":

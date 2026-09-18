@@ -692,35 +692,84 @@ def rate_table_problems(rates=None):
     return problems
 
 
+# A table is indexed on weight, so it can only be filled two ways.
+#
+#   "weight"             every cell is a weight-based quote, one service throughout.
+#   "cheapest_available" every cell is whatever the carrier actually charges for THIS shop's
+#                        standard package at that weight — which is what Pirate Ship displays,
+#                        because it rate shops weight-based against Cubic and shows the winner.
+#
+# The second is the honest one for a shop that buys the cheapest line on the screen, and it is the
+# only one that can hold a Cubic price without lying about what the number means. Its price is a
+# function of weight ALONE only while the package is fixed: Cubic is charged on volume, so changing
+# the box changes half the table. That is why `quoted_for_package` is mandatory for it.
+RATE_BASES = ("weight", "cheapest_available")
+
+
+def package_problem(rates=None):
+    """Why this table's package declaration doesn't support its rate basis, or None."""
+    rates = load_rates() if rates is None else rates
+    basis = rates.get("rate_basis")
+    if basis not in RATE_BASES:
+        return f"rate_basis {basis!r} is not one of {RATE_BASES}"
+    if basis != "cheapest_available":
+        return None
+    pkg = rates.get("quoted_for_package") or {}
+    dims = pkg.get("dims_in")
+    if not (isinstance(dims, list) and len(dims) == 3 and all(
+            isinstance(d, (int, float)) and d > 0 for d in dims)):
+        return ("rate_basis is 'cheapest_available' but quoted_for_package.dims_in is not three "
+                "positive numbers — a rate-shopped price is only a function of weight while the "
+                "box is fixed, because the Cubic half of it is charged on volume")
+    if not pkg.get("verified"):
+        return ("quoted_for_package is not verified — the box has to be measured, not estimated, "
+                "before a table built on it can charge anyone")
+    return None
+
+
+def allowed_services(rates=None):
+    """Which service names may appear in a cell's provenance under this table's rate basis."""
+    rates = load_rates() if rates is None else rates
+    if rates.get("rate_basis") == "cheapest_available":
+        return tuple(rates.get("rate_shopped_services") or ())
+    service = rates.get("service")
+    return (service,) if service else ()
+
+
 def unverified_cells(rates=None):
-    """Required cells whose price is not backed by a verified quote on the table's own service.
+    """Required cells whose price is not backed by a verified quote this table may hold.
 
     A price in the table is only as good as its provenance. Every cell needs an entry in
-    `cell_provenance` that is marked verified AND was quoted on the same service and rate basis the
-    table is defined for — a Ground Advantage Cubic figure is a real price for a real product, but
-    it is not a price for THIS table, because cubic is charged on volume and this table is indexed
-    on weight alone.
+    `cell_provenance` that is marked verified, quoted on a service this table's rate basis allows,
+    and — under 'cheapest_available' — quoted for the same package the table declares. A Ground
+    Advantage Cubic figure is a real price for a real product; whether it belongs in a given cell
+    depends entirely on what that table says its numbers mean.
     """
     rates = load_rates() if rates is None else rates
     prov = rates.get("cell_provenance") or {}
     basis = rates.get("rate_basis")
-    service = rates.get("service")
+    allowed = allowed_services(rates)
+    pkg_dims = ((rates.get("quoted_for_package") or {}).get("dims_in")
+                if basis == "cheapest_available" else None)
     out = []
     for (section, band, group), price in required_cells(rates):
         if price is None:
             continue
-        entry = prov.get(f"{section}.{band}.{group}")
+        key = f"{section}.{band}.{group}"
+        entry = prov.get(key)
         if not entry:
-            out.append((f"{section}.{band}.{group}", "no provenance recorded"))
+            out.append((key, "no provenance recorded"))
         elif not entry.get("verified"):
-            out.append((f"{section}.{band}.{group}",
-                        entry.get("why_unverified") or "marked unverified"))
-        elif service and entry.get("service") != service:
-            out.append((f"{section}.{band}.{group}",
-                        f"quoted on {entry.get('service')!r}, not {service!r}"))
+            out.append((key, entry.get("why_unverified") or "marked unverified"))
+        elif allowed and entry.get("service") not in allowed:
+            out.append((key, f"quoted on {entry.get('service')!r}, which this table "
+                             f"({basis}) does not accept; allowed: {', '.join(allowed)}"))
         elif basis and entry.get("rate_basis") != basis:
-            out.append((f"{section}.{band}.{group}",
-                        f"rate basis {entry.get('rate_basis')!r}, not {basis!r}"))
+            out.append((key, f"rate basis {entry.get('rate_basis')!r}, not {basis!r}"))
+        elif pkg_dims and entry.get("dims_in") != pkg_dims:
+            out.append((key, f"quoted for a {entry.get('dims_in')} package, but the table is "
+                             f"declared for {pkg_dims} — a rate-shopped cell is only valid for "
+                             f"the box it was quoted in"))
     return out
 
 
@@ -739,7 +788,7 @@ def zone_pricing_ready(rates=None):
         return False
     if any(v is None for _key, v in required_cells(rates)):
         return False
-    if rate_table_problems(rates):
+    if rate_table_problems(rates) or package_problem(rates):
         return False
     return not unverified_cells(rates)
 

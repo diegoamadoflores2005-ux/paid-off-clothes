@@ -164,6 +164,10 @@ def main():
               f"{'x'.join(map(str, dims))} in, not entered in the table")
         for line in q.get("why", []):
             print(f"   {line}")
+        for line in q.get("correction", []):
+            print(f"   ! {line}")
+        if q.get("the_one_thing_that_cannot_be_right"):
+            print(f"   CANNOT BE RIGHT: {q['the_one_thing_that_cannot_be_right']}")
         if q.get("blocking_question"):
             print(f"   ASK: {q['blocking_question']}")
         print()
