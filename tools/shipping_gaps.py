@@ -96,11 +96,33 @@ def main():
             print(f"  ${q['price_usd']:.2f} at {q['oz']} oz to {q['dest_zip']} — {zone}; {weighed}")
         print()
 
+    # Side-by-side carrier quotes for one lane. Only the row matching this file's `carrier` can
+    # ever reach the table — a ladder built from two carriers prices nothing anyone can buy.
+    for cmp in rates.get("rate_comparisons", []):
+        dims = cmp.get("dims_in_stated")
+        dims_s = "x".join(str(d) for d in dims) + " in (estimated)" if dims else "no dimensions"
+        print(f"Same lane, {cmp['oz']} oz to {cmp['dest_zip']} (zone {cmp['zone']}), {dims_s}:")
+        for q in sorted(cmp.get("quotes", []), key=lambda q: q["price_usd"]):
+            mark = "  <- table" if q["carrier"] in (rates.get("carrier") or "") and \
+                q["service"] in (rates.get("carrier") or "") else ""
+            print(f"  ${q['price_usd']:>5.2f}  {q['carrier']} {q['service']}{mark}")
+        print()
+
     # A conflict is the kind of thing that must be in front of you every time, not filed away.
+    # A *resolved* one is the opposite: shouting about it every run buries the open ones, so it
+    # collapses to a single line and keeps its full reasoning in the file.
     for c in rates.get("_conflicts", []):
+        status = c.get("status", "")
+        if status.startswith("RESOLVED"):
+            print(f"   resolved: {c['cell']} — {status[len('RESOLVED'):].lstrip(' -—')}")
+            continue
         print(f"!! CONFLICT in {c['cell']}: {' vs '.join(c['quotes'])}")
         for line in c.get("why_it_matters", []):
             print(f"   {line}")
+        if c.get("to_resolve"):
+            print(f"   NEXT: {c['to_resolve']}")
+        if c.get("meanwhile"):
+            print(f"   meanwhile: {c['meanwhile']}")
         print()
 
     print(f"cells filled : {len(filled)} of {len(all_cells)}")

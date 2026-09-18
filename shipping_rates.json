@@ -46,17 +46,17 @@
       "collected": "2026-09-16",
       "source": "Pirate Ship calculator, sample quote supplied by owner",
       "notes": [
-        "REFERENCE ONLY. Superseded for the sub/near cell by the 12.8 oz quote below.",
-        "Zone 4 is now confirmed, which matched the distance inference.",
-        "STILL NOT USED: the 8 oz was estimated rather than weighed, and it CONFLICTS with the",
-        "verified quote — see _conflicts below."
+        "NOT a USPS price. Identified as UPS Ground Saver by the 2026-09-18 four-way comparison, which returned UPS Ground Saver at exactly $5.82 on the same lane.",
+        "Kept only as the record of how it was misfiled, and as a UPS reference point."
       ],
       "zone_inferred": 4,
       "zone_inference_basis": "85641 -> 90210 is about 450 miles, and USPS zone 4 covers 301-600 miles. Distance is how zones are broadly set, but the published chart is by ZIP prefix pair and is authoritative.",
       "zone_verified": true,
       "group_if_confirmed": "near",
-      "use": "reference only",
-      "zone_confirmed_by": "owner, 2026-09-16"
+      "use": "not applicable — different carrier",
+      "zone_confirmed_by": "owner, 2026-09-16",
+      "carrier": "UPS",
+      "service": "Ground Saver"
     },
     {
       "price_usd": 5.4,
@@ -1177,7 +1177,36 @@
         "Update after importing the zone chart: both quotes are confirmed zone 4 / near, so the conflict is NOT a zone mix-up — that explanation is now ruled out.",
         "New lead from the chart itself: its Effective Date is September 1, 2026. If the $5.82 sample was taken before that date and the $5.40 after it, a rate change explains the whole gap and the $5.40 is simply the current price. The $5.82 was described as a 'sample quote' with no date given, so this is the cheapest hypothesis to test: re-quote 8 oz to 90210 today. If it comes back $5.40, the conflict is closed and sub-1-lb is confirmed flat."
       ],
-      "status": "open — one test would close it (re-quote 8 oz to 90210 today)"
+      "status": "RESOLVED — the two figures were different carriers",
+      "resolution": [
+        "The $5.82 was UPS Ground Saver, not USPS Ground Advantage. Re-quoting the same lane today returned UPS Ground Saver at exactly $5.82 alongside USPS Ground Advantage at $5.83, which identifies the original sample beyond reasonable doubt.",
+        "So there was never a USPS-versus-USPS contradiction. It was one carrier's price recorded against another carrier's table.",
+        "The rate-change hypothesis is withdrawn: the price did not move, the carrier label was wrong."
+      ]
+    },
+    {
+      "cell": "sub / near (zone 4) — USPS Ground Advantage",
+      "quotes": [
+        "$5.40 at 12.8 oz (2026-09-16, no dimensions recorded)",
+        "$5.83 at 8 oz (2026-09-18, 12x10 estimated mailer)"
+      ],
+      "status": "OPEN — this one is genuinely USPS vs USPS",
+      "why_it_matters": [
+        "Same carrier, same service, same origin, same destination, same zone, both under a pound.",
+        "The LIGHTER parcel quoted HIGHER: 8 oz at $5.83 against 12.8 oz at $5.40. Weight alone",
+        "cannot produce that, so something other than weight differs between the two quotes.",
+        "It also breaks the assumption behind having a single 'under 1 lb' band at all — that every",
+        "sub-1-lb parcel costs the same within a zone. If that is false for this account, the band",
+        "must be split (4 / 8 / 12 / 15.99 oz) and the whole first row re-quoted.",
+        "Most likely explanation to test first: USPS Ground Advantage CUBIC pricing. Pirate Ship",
+        "lists it as its own service line for packages under 0.5 cubic feet, and it is often",
+        "cheaper than weight-based. If the $5.40 was a cubic quote and the $5.83 a standard one,",
+        "they are two different products and only one belongs in the table.",
+        "Second possibility: the $5.40 was quoted with different (smaller) package dimensions. None",
+        "were recorded for it, which is why this cannot be settled from the file."
+      ],
+      "to_resolve": "Re-quote BOTH weights (8 oz and 12.8 oz) in one sitting with the same stated dimensions, and record the exact service name Pirate Ship shows for each line.",
+      "meanwhile": "core.sub.near is left at $5.40 and NOT overwritten — picking between two unexplained figures would bury the question rather than answer it."
     }
   ],
   "zone_map_source": {
@@ -1218,6 +1247,45 @@
       "effect_today": "967 is absent from zone_map, so a Honolulu destination returns no zone and falls back to the flat-ladder estimate rather than being priced by zone.",
       "note_for_the_decision": "Under the BANDED policy every plausible reading lands in 'far': 8 is far, its neighbour 968 is 8, and 969 is 9. So the group is not in doubt even though the zone number is.",
       "to_resolve": "Confirm 967's zone from USPS (the Get Zone for ZIP Code Pair tool on postcalc, or a Pirate Ship quote to a 967xx address) and add it to zone_map."
+    }
+  ],
+  "rate_comparisons": [
+    {
+      "collected": "2026-09-18",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "group": "near",
+      "oz": 8,
+      "band": "sub",
+      "dims_in_stated": [
+        12,
+        10
+      ],
+      "dims_note": "A poly mailer needs three dimensions; only two were given, and both are estimates.",
+      "quotes": [
+        {
+          "carrier": "UPS",
+          "service": "Ground Saver",
+          "price_usd": 5.82
+        },
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 5.83
+        },
+        {
+          "carrier": "UPS",
+          "service": "Ground",
+          "price_usd": 7.12
+        },
+        {
+          "carrier": "USPS",
+          "service": "Priority Mail",
+          "price_usd": 9.22
+        }
+      ],
+      "applies_to_table": "USPS Ground Advantage $5.83 only. The table is defined as one carrier and one service; mixing in a UPS price would make the ladder incoherent and would not match what the checkout panel tells the buyer it is quoting."
     }
   ]
 }
