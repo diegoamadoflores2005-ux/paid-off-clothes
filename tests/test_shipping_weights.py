@@ -260,11 +260,17 @@ class TestZonePricing(unittest.TestCase):
         orders._rates_cache["mtime"] = None
         return orders
 
+    SERVICE = "Ground Advantage"
+    BASIS = "weight"
+
     def _full_table(self):
         bands = ["sub"] + [str(b) for b in range(2, 10)]
-        return {
+        rates = {
             "origin_zip": "85641",
             "zone_policy": "banded",
+            "carrier": "USPS",
+            "service": self.SERVICE,
+            "rate_basis": self.BASIS,
             "zone_groups": {"near": {"zones": [1, 2, 3, 4]},
                             "mid": {"zones": [5, 6]},
                             "far": {"zones": [7, 8, 9]}},
@@ -276,6 +282,21 @@ class TestZonePricing(unittest.TestCase):
                 "over_max": {"near": 30, "mid": 33, "far": 36},
             },
         }
+        rates["cell_provenance"] = self._provenance_for(rates)
+        return rates
+
+    def _provenance_for(self, rates):
+        """Mark every filled required cell as a verified quote on the table's own service.
+
+        The fixture has to supply this now: a price with no provenance is treated as unverified, so
+        without it a fully-filled synthetic table would never switch on.
+        """
+        orders = load_orders()
+        return {f"{section}.{band}.{group}": {"verified": True,
+                                              "service": rates["service"],
+                                              "rate_basis": rates["rate_basis"]}
+                for (section, band, group), price in orders.required_cells(rates)
+                if price is not None}
 
     # ---- the gate ------------------------------------------------------------------------------
     def test_the_real_table_is_not_ready_yet(self):
@@ -354,6 +375,96 @@ class TestZonePricing(unittest.TestCase):
         self.assertEqual(orders.shipping_source("90210"), "zone")
         self.assertEqual(orders.shipping_source("59718"), "estimate",
                          "an unmapped destination is still an estimate")
+
+    # ---- unquoted pounds -----------------------------------------------------------------------
+    def test_an_unquoted_pound_pays_the_next_band_up_not_the_fallback(self):
+        """1, 10, 12, 14 and 15 lb have no row. They must round up into the table, not out of it.
+
+        The lookup used to drop any unquoted pound straight to over_max — the fallback for parcels
+        heavier than the whole table, and the dearest cell in it. That inverted the ladder: a 10 lb
+        order paid the over-max price while an 11 lb order paid the 11 lb rate.
+        """
+        rates = self._full_table()
+        rates["rate_table"]["heavy"] = {"11": {"near": 20, "mid": 21, "far": 22}}
+        rates["cell_provenance"] = self._provenance_for(rates)
+        orders = self._with_rates(rates)
+
+        ten_lb = orders.zone_shipping_cents(160, "90210")
+        eleven_lb = orders.zone_shipping_cents(176, "90210")
+        self.assertEqual(ten_lb, 2000, "10 lb must pay the next band quoted above it, the 11 lb one")
+        self.assertEqual(ten_lb, eleven_lb)
+        self.assertLess(ten_lb, 3000, "10 lb must not pay the over-max fallback")
+
+    def test_exactly_one_pound_is_not_charged_the_over_max_fallback(self):
+        """16.0 oz rounds to the 1 lb band, which no table has. It must fall up to 2 lb."""
+        orders = self._with_rates(self._full_table())
+        self.assertEqual(orders.zone_shipping_cents(16, "90210"),
+                         orders.zone_shipping_cents(17, "90210"))
+
+    # ---- soundness -----------------------------------------------------------------------------
+    def test_a_cheaper_heavier_band_keeps_zone_pricing_off(self):
+        """The shape that a cubic quote makes when it lands in a weight table.
+
+        These are the figures actually collected: $9.15 for a 2 lb weight-based parcel, then $5.93
+        for 3, 4 and 5 lb — one price across three weights, which is the signature of Ground
+        Advantage CUBIC, a volume-priced product. Nothing in the code noticed at the time.
+        """
+        rates = self._full_table()
+        rates["rate_table"]["core"]["2"]["near"] = 9.15
+        for band in ("3", "4", "5"):
+            rates["rate_table"]["core"][band]["near"] = 5.93
+        orders = self._with_rates(rates)
+        problems = orders.rate_table_problems(rates)
+        self.assertTrue(problems, "a heavier band priced below a lighter one must be reported")
+        self.assertIn("3", problems[0])
+        self.assertFalse(orders.zone_pricing_ready(),
+                         "an unsound table must never start charging customers")
+
+    def test_a_cheaper_further_zone_keeps_zone_pricing_off(self):
+        """far below near in one band means the columns were filled in the wrong order."""
+        rates = self._full_table()
+        rates["rate_table"]["core"]["4"]["far"] = 1.00
+        orders = self._with_rates(rates)
+        self.assertTrue(orders.rate_table_problems(rates))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_discounted_over_max_is_rejected(self):
+        rates = self._full_table()
+        rates["rate_table"]["over_max"]["near"] = 1.00
+        orders = self._with_rates(rates)
+        self.assertTrue(orders.rate_table_problems(rates))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_sound_table_reports_no_problems(self):
+        orders = self._with_rates(self._full_table())
+        self.assertEqual(orders.rate_table_problems(), [])
+
+    # ---- provenance ----------------------------------------------------------------------------
+    def test_a_cubic_quote_cannot_fill_a_weight_table(self):
+        """Cubic is a real price for a real service — just not one this table can be indexed on.
+
+        Cubic is charged on the box's volume and is flat across weight up to 20 lb, so a cubic
+        figure in a weight-indexed ladder prices every other weight in that band wrongly.
+        """
+        rates = self._full_table()
+        rates["cell_provenance"]["core.3.near"] = {
+            "verified": True, "service": "Ground Advantage Cubic", "rate_basis": "volume"}
+        orders = self._with_rates(rates)
+        unverified = orders.unverified_cells(rates)
+        self.assertTrue(any(cell == "core.3.near" for cell, _why in unverified))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_cell_with_no_provenance_keeps_zone_pricing_off(self):
+        rates = self._full_table()
+        del rates["cell_provenance"]["core.sub.near"]
+        orders = self._with_rates(rates)
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_a_cell_flagged_unverified_keeps_zone_pricing_off(self):
+        rates = self._full_table()
+        rates["cell_provenance"]["core.2.near"]["verified"] = False
+        orders = self._with_rates(rates)
+        self.assertFalse(orders.zone_pricing_ready())
 
 
 if __name__ == "__main__":

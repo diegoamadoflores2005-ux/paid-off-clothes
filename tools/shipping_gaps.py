@@ -49,6 +49,22 @@ def load():
         return json.load(fh)
 
 
+def load_orders():
+    """db/orders.py, compiled from source rather than imported.
+
+    Importing it would pull in the whole order pipeline for two pure functions, and a stale .pyc is
+    validated on (mtime, size) — a same-length edit in the same second is served from cache, which
+    once had the shipping tests checking bytecode instead of the file on disk.
+    """
+    path = os.path.join(APP_DIR, "db", "orders.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    mod = types.ModuleType("orders_for_gaps")
+    mod.__file__ = path
+    exec(compile(src, path, "exec"), mod.__dict__)
+    return mod
+
+
 def cells(rates):
     """Every cell in the table as (section, band, group, price)."""
     out = []
@@ -65,6 +81,7 @@ def cells(rates):
 def main():
     args = sys.argv[1:]
     rates = load()
+    orders = load_orders()
     origin = rates.get("origin_zip")
     policy = rates.get("zone_policy")
     all_cells = cells(rates)
@@ -73,7 +90,9 @@ def main():
 
     print("Shipping quotes — Paid Off Clothes")
     print("=" * 72)
-    print(f"carrier     : {rates.get('carrier')}")
+    print(f"carrier     : {rates.get('carrier')} {rates.get('service', '')}".rstrip())
+    print(f"rate basis  : {rates.get('rate_basis')}  "
+          f"(only {rates.get('rate_basis')}-based quotes may fill a cell)")
     print(f"origin ZIP  : {origin or 'NOT SET'}")
     print(f"zone policy : {policy}")
     for g in GROUPS:
@@ -107,7 +126,8 @@ def main():
         if cmp.get("quotes"):
             print(f"Same lane at {cmp['oz']} oz, {lane}:")
             for q in sorted(cmp["quotes"], key=lambda q: q["price_usd"]):
-                ours = f"{q['carrier']} {q['service']}" == (rates.get("carrier") or "")
+                ours = (q["carrier"] == rates.get("carrier")
+                        and q["service"] == rates.get("service"))
                 print(f"  ${q['price_usd']:>5.2f}  {q['carrier']} {q['service']}"
                       + ("  <- the only one eligible for the table" if ours else ""))
         if cmp.get("results"):
@@ -130,13 +150,41 @@ def main():
         print(f"!! CONFLICT in {c['cell']}: {' vs '.join(c['quotes'])}")
         for line in c.get("why_it_matters", []):
             print(f"   {line}")
+        for line in c.get("diagnosis", []):
+            print(f"   > {line}")
         if c.get("to_resolve"):
             print(f"   NEXT: {c['to_resolve']}")
         if c.get("meanwhile"):
             print(f"   meanwhile: {c['meanwhile']}")
         print()
 
+    for q in rates.get("quarantined_quotes", []):
+        dims = q.get("dims_in_stated") or []
+        print(f"~~ QUARANTINED: {len(q.get('bands_quoted', []))} quotes at "
+              f"{'x'.join(map(str, dims))} in, not entered in the table")
+        for line in q.get("why", []):
+            print(f"   {line}")
+        if q.get("blocking_question"):
+            print(f"   ASK: {q['blocking_question']}")
+        print()
+
+    # Soundness and provenance are reported here, not only inside zone_pricing_ready(), because a
+    # table can be completely filled and still be holding a mistake.
+    problems = orders.rate_table_problems(rates)
+    if problems:
+        print("!! THE TABLE IS NOT SOUND — zone pricing cannot switch on:")
+        for pr in problems:
+            print(f"   {pr}")
+        print()
+    unverified = orders.unverified_cells(rates)
+    if unverified:
+        print("Cells holding a price that is NOT verified:")
+        for cell, why in unverified:
+            print(f"   {cell}: {why}")
+        print()
+
     print(f"cells filled : {len(filled)} of {len(all_cells)}")
+    print(f"  of those, verified : {len(filled) - len(unverified)}")
     print(f"cells empty  : {len(empty)}")
     print()
 

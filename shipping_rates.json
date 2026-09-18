@@ -26,7 +26,7 @@
     "  collected     when it was taken. Carrier rates change; a stale quote is not a verified one.",
     "  source        where it came from."
   ],
-  "carrier": "USPS Ground Advantage",
+  "carrier": "USPS",
   "origin_zip": "85641",
   "zone_policy": "banded",
   "_zone_policy_options": {
@@ -1220,21 +1220,34 @@
     {
       "cell": "2 lb / near (zone 4)",
       "quotes": [
-        "$9.15 at 32 oz (2026-09-16)"
+        "$9.15 at 32 oz (2026-09-16, 12x9x3)",
+        "$5.93 at 48 oz (2026-09-18, 12x19x3) — a heavier parcel, priced lower"
       ],
-      "status": "OPEN — unverified by association, not contradicted",
+      "status": "OPEN — diagnosed, awaiting one re-quote",
       "why_it_matters": [
-        "Nothing disagrees with $9.15. The concern is its provenance: it was collected in the",
-        "same 2026-09-16 Pirate Ship session as the $5.40, and that figure has now been shown",
-        "to be wrong by two fresh quotes without anyone establishing WHY it was wrong.",
-        "Whatever produced a low sub-1-lb number that day — a different service line, a promo,",
-        "a mistyped origin, a stale browser tab — could have produced a low 2 lb number too.",
-        "An unexplained error is not safely assumed to be a one-off.",
+        "A 3 lb parcel came back CHEAPER than this 2 lb one on the same lane. On a single",
+        "service that is arithmetically impossible, so the two are not the same service.",
+        "Provenance was already thin: this was collected in the same 2026-09-16 session as the",
+        "$5.40 that two fresh quotes later overturned, and nobody established why that one was",
+        "wrong. An unexplained error is not safely assumed to be a one-off.",
         "This is the shop's exposure, not the buyer's: an under-quote means the shop eats the",
         "difference on every order in the band, which is the direction that costs money quietly."
       ],
-      "to_resolve": "Re-quote 2 lb (32 oz) to 90210 with the same 12x9x3 box, reading the service line back. If it returns $9.15 the cell is corroborated and the 16 Sept session was fine apart from the one figure; if it returns something else, every quote from that session is suspect and the table starts from today.",
-      "meanwhile": "core.2.near stays at $9.15. It is the only figure on file for that cell and nothing contradicts it — but it is corroborated once less than the sub band."
+      "to_resolve": "Re-quote 2 lb to 90210 in the 12x9x3 box and write down EVERY service line Pirate Ship shows with its price, not just the one you pick.",
+      "meanwhile": "core.2.near keeps the $9.15 figure but is marked unverified, so zone_pricing_ready() stays false and nothing is charged from it. Kept rather than deleted because it is the only 2 lb figure on file and is probably the right SHAPE — a weight-based rate — just not confirmed to be the cheapest line that was on the screen.",
+      "diagnosis": [
+        "The 3-5 lb quotes coming in at $5.93 settle what kind of error this is. A 3 lb parcel",
+        "cannot cost less than a 2 lb one on the same service, so the two figures are not the",
+        "same service. The flat-across-weight shape of the $5.93 set identifies it as Ground",
+        "Advantage Cubic, which leaves $9.15 as the weight-based one.",
+        "That makes $9.15 plausible as a weight-based 2 lb rate. What it does NOT make it is",
+        "verified, and there is a live reason to doubt it: the same 12 x 9 x 3 box is",
+        "cubic-eligible too, at 0.19 cu ft — a CHEAPER tier than the 0.4 cu ft that quoted",
+        "$5.93. So a cubic option almost certainly existed for that parcel at under $5.93, and",
+        "$9.15 was not the cheapest line on the screen.",
+        "The cell is therefore marked unverified rather than deleted, and zone pricing cannot",
+        "switch on while it is."
+      ]
     }
   ],
   "zone_map_source": {
@@ -1352,5 +1365,107 @@
     "how": "Two weights (8 oz and 12.8 oz) quoted in one sitting, same lane, same stated dimensions, same service line. Both $5.83.",
     "scope": "Verified for zone 4 / near only. Mid and far are assumed to behave the same way because the flat-rate change is national, but neither has been tested. Quote two weights for the first mid and the first far quote too, and this becomes settled rather than assumed.",
     "why_it_matters": "This is the assumption the whole first row of the table rests on. Had it been false, every sub-1-lb cell would need four quotes instead of one."
-  }
+  },
+  "service": "Ground Advantage",
+  "rate_basis": "weight",
+  "service_note": "This table is indexed on weight alone, so it can only hold WEIGHT-BASED Ground Advantage prices. USPS Ground Advantage Cubic is a different product: it is priced on the box's volume in 0.1 cu ft increments and is flat across weight up to 20 lb. A cubic figure dropped into a weight band is not a slightly-off price, it is a price for a different variable.",
+  "services_seen": {
+    "Ground Advantage": {
+      "rate_basis": "weight",
+      "eligible_for_this_table": true,
+      "note": "Priced on the rounded-up pound and the zone. This is what the table models."
+    },
+    "Ground Advantage Cubic": {
+      "rate_basis": "volume",
+      "eligible_for_this_table": false,
+      "limits": {
+        "max_any_dimension_in": 22,
+        "max_volume_cu_ft": 1.0,
+        "max_weight_lb": 20,
+        "increments_cu_ft": 0.1
+      },
+      "limits_source": "https://www.pirateship.com/usps/ground-advantage-cubic",
+      "note": "Flat across weight up to 20 lb — price depends only on the box. Pirate Ship rate shops Cubic against weight-based automatically and shows whichever is cheaper, which is why cubic prices can arrive without anyone asking for them."
+    },
+    "Ground Advantage Cubic is why the bulk quotes are flat": "12 x 19 x 3 in = 684 cu in = 0.396 cu ft. Under the 1.0 cu ft cap, longest side 19 in under the 22 in cap, so every one of those parcels is cubic-eligible and every one prices at the same 0.4 cu ft tier regardless of whether it holds 3 lb or 5 lb of clothes."
+  },
+  "cell_provenance": {
+    "core.sub.near": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 5.83,
+      "quoted_on": "2026-09-18",
+      "dest_zip": "90210",
+      "evidence": "Two weights (8 oz, 12.8 oz) quoted in one sitting both returned $5.83, and the owner read the service line back as plain Ground Advantage."
+    },
+    "core.2.near": {
+      "verified": false,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 9.15,
+      "quoted_on": "2026-09-16",
+      "dest_zip": "90210",
+      "why_unverified": "Contradicted by the 3 lb quote. $9.15 at 2 lb sits ABOVE $5.93 at 3, 4 and 5 lb on the same lane, and postage cannot fall as weight rises on one service. Either this figure is not weight-based Ground Advantage, or the 3-5 lb ones are not — and the flat-across-weight shape of the latter says they are cubic. Until the 2 lb parcel is re-quoted with its service line read back, this cell is not safe to charge from."
+    }
+  },
+  "quarantined_quotes": [
+    {
+      "collected": "2026-09-18",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "group": "near",
+      "dims_in_stated": [
+        12,
+        19,
+        3
+      ],
+      "cubic_in": 684,
+      "cubic_ft": 0.3958,
+      "cubic_tier_ft": 0.4,
+      "bands_quoted": [
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "known_prices": {
+        "3": 5.93,
+        "4": 5.93,
+        "5": 5.93
+      },
+      "prices_not_supplied": [
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "status": "QUARANTINED — not entered in rate_table",
+      "why": [
+        "One price across three different weights. Weight-based Ground Advantage strictly",
+        "increases with the rounded-up pound, so a figure identical at 3, 4 and 5 lb is not a",
+        "weight-based figure. USPS Ground Advantage Cubic is: it is priced on the box's volume in",
+        "0.1 cu ft increments and is flat across weight up to 20 lb.",
+        "The stated box fits cubic on every limit. 12 x 19 x 3 = 684 cu in = 0.396 cu ft, inside",
+        "the 1.0 cu ft cap; the longest side is 19 in, inside the 22 in cap; and 3-9 lb is inside",
+        "the 20 lb cap. So cubic was available and, at 0.4 cu ft, cheap.",
+        "Pirate Ship rate shops Cubic against weight-based for Ground Advantage automatically and",
+        "shows whichever is cheaper. Nobody has to ask for cubic to be quoted it.",
+        "$5.93 also sits BELOW the $9.15 recorded at 2 lb, which is the arithmetic impossibility",
+        "that gives the whole thing away."
+      ],
+      "what_this_does_not_mean": [
+        "These are not bad prices. They are real, buyable prices, and cubic may well be the right",
+        "product for this shop. They are simply not prices a weight-indexed table can hold: the",
+        "price follows the BOX, so a 0.4 cu ft mailer costs $5.93 whether it carries 3 lb or 19 lb,",
+        "and a different box at the same weight costs something else entirely."
+      ],
+      "blocking_question": "Which service did Pirate Ship name on the line these came from — 'Ground Advantage' or 'Ground Advantage Cubic'?",
+      "dims_caveat": "12 x 19 x 3 is an estimate and is also close enough to the 12 x 9 x 3 recorded for the 2 lb quote that a typo cannot be ruled out from here. At 12 x 9 x 3 the box is 324 cu in = 0.19 cu ft, a cheaper cubic tier, which would make the flat $5.93 cubic just the same but at a different tier."
+    }
+  ]
 }

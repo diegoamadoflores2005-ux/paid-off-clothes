@@ -641,16 +641,143 @@ def required_cells(rates=None):
     return cells
 
 
+GROUPS_FAR_TO_NEAR = ("near", "mid", "far")
+
+
+def rate_table_problems(rates=None):
+    """Structural faults that make a table unsafe to charge from. Empty list means sound.
+
+    These are arithmetic facts about postage, not preferences, so a table breaking one of them is
+    holding a mistake rather than an unusual price:
+
+    - Postage never falls as weight rises on one service. A heavier parcel costing less means two
+      different products got mixed into one column — which is exactly what happened here: a 2 lb
+      weight-based quote sat above 3, 4 and 5 lb quotes that were really Ground Advantage CUBIC,
+      a volume-priced product that is flat across weight. Nothing in the code noticed.
+    - Postage never falls as the destination gets further away. A near price above the matching far
+      price means the columns were filled in the wrong order.
+    - The over-max fallback is never cheaper than the heaviest band it backs up, or it would be a
+      discount for exceeding the table.
+    """
+    rates = load_rates() if rates is None else rates
+    table = rates.get("rate_table") or {}
+    problems = []
+
+    bands = table_bands(table)
+    for group in GROUPS_FAR_TO_NEAR:
+        seen = []  # (pounds, key, price) for bands this group actually prices
+        for lb, section, key in bands:
+            cell = ((table.get(section) or {}).get(key) or {}).get(group)
+            if cell is not None:
+                seen.append((lb, key, float(cell)))
+        for (lb_a, key_a, price_a), (lb_b, key_b, price_b) in zip(seen, seen[1:]):
+            if price_b < price_a:
+                problems.append(
+                    f"{group}: {key_b} lb at ${price_b:.2f} is cheaper than {key_a} lb at "
+                    f"${price_a:.2f} — postage cannot fall as weight rises on one service")
+        over = (table.get("over_max") or {}).get(group)
+        if over is not None and seen and float(over) < seen[-1][2]:
+            problems.append(
+                f"{group}: the over-max fallback ${float(over):.2f} is cheaper than the heaviest "
+                f"band ({seen[-1][1]} lb at ${seen[-1][2]:.2f})")
+
+    for lb, section, key in bands:
+        row = (table.get(section) or {}).get(key) or {}
+        priced = [(g, float(row[g])) for g in GROUPS_FAR_TO_NEAR if row.get(g) is not None]
+        for (g_a, price_a), (g_b, price_b) in zip(priced, priced[1:]):
+            if price_b < price_a:
+                problems.append(
+                    f"band {key}: {g_b} at ${price_b:.2f} is cheaper than {g_a} at ${price_a:.2f} "
+                    f"— postage cannot fall as the destination gets further away")
+    return problems
+
+
+def unverified_cells(rates=None):
+    """Required cells whose price is not backed by a verified quote on the table's own service.
+
+    A price in the table is only as good as its provenance. Every cell needs an entry in
+    `cell_provenance` that is marked verified AND was quoted on the same service and rate basis the
+    table is defined for — a Ground Advantage Cubic figure is a real price for a real product, but
+    it is not a price for THIS table, because cubic is charged on volume and this table is indexed
+    on weight alone.
+    """
+    rates = load_rates() if rates is None else rates
+    prov = rates.get("cell_provenance") or {}
+    basis = rates.get("rate_basis")
+    service = rates.get("service")
+    out = []
+    for (section, band, group), price in required_cells(rates):
+        if price is None:
+            continue
+        entry = prov.get(f"{section}.{band}.{group}")
+        if not entry:
+            out.append((f"{section}.{band}.{group}", "no provenance recorded"))
+        elif not entry.get("verified"):
+            out.append((f"{section}.{band}.{group}",
+                        entry.get("why_unverified") or "marked unverified"))
+        elif service and entry.get("service") != service:
+            out.append((f"{section}.{band}.{group}",
+                        f"quoted on {entry.get('service')!r}, not {service!r}"))
+        elif basis and entry.get("rate_basis") != basis:
+            out.append((f"{section}.{band}.{group}",
+                        f"rate basis {entry.get('rate_basis')!r}, not {basis!r}"))
+    return out
+
+
 def zone_pricing_ready(rates=None):
-    """True only when the zone map AND every required rate cell are present.
+    """True only when the zone map and every required cell are present, sound and verified.
 
     All-or-nothing on purpose. A partly-filled table would fall back per-order, so the same basket
     would cost different amounts depending on which cell happened to be filled.
+
+    Soundness and provenance are part of "ready" rather than a separate warning because the failure
+    they catch is silent. A table can be completely filled and still be wrong — mixing a
+    volume-priced service into a weight-indexed ladder fills every cell and charges nonsense.
     """
     rates = load_rates() if rates is None else rates
     if not (rates.get("zone_map") or {}):
         return False
-    return all(v is not None for _key, v in required_cells(rates))
+    if any(v is None for _key, v in required_cells(rates)):
+        return False
+    if rate_table_problems(rates):
+        return False
+    return not unverified_cells(rates)
+
+
+def table_bands(table):
+    """Every band the table actually defines, as (pounds, section, key), lightest first.
+
+    'sub' sorts as 0 pounds. Sorting numerically matters: the JSON keys are strings, so a plain
+    key sort puts "11" before "2".
+    """
+    out = []
+    for section in ("core", "heavy"):
+        for key in (table.get(section) or {}):
+            out.append((0 if key == "sub" else int(key), section, key))
+    return sorted(out)
+
+
+def zone_rate_cents(oz, group, table):
+    """What this parcel is charged in one zone group: its own band, or the next one quoted above it.
+
+    The table is a set of quotes at particular pounds, not a complete ladder — 1, 10, 12, 14 and 15
+    lb have no row. A parcel landing on an unquoted pound still has to be charged something, and the
+    only safe something is the next band UP, because USPS itself bills at the rounded-up pound.
+
+    This used to drop straight to over_max, which is the fallback for parcels heavier than anything
+    in the table — the most expensive cell there is. So a 10 lb order paid the heaviest-order price
+    while an 11 lb order paid the 11 lb rate, and a parcel of exactly 16.0 oz paid it too. Both
+    inversions are the sort a customer notices and nobody else does.
+    """
+    want_lb = 0 if band_for_oz(oz) == "sub" else int(band_for_oz(oz))
+    for lb, section, key in table_bands(table):
+        if lb < want_lb:
+            continue
+        cell = ((table.get(section) or {}).get(key) or {}).get(group)
+        if cell is not None:
+            return round(float(cell) * 100)
+    over = (table.get("over_max") or {}).get(group)
+    return None if over is None else round(float(over) * 100)
 
 
 def zone_shipping_cents(oz, dest_zip, rates=None):
@@ -661,11 +788,4 @@ def zone_shipping_cents(oz, dest_zip, rates=None):
     group = group_for_zone(zone_for_zip(dest_zip, rates), rates)
     if group is None:
         return None
-    table = rates.get("rate_table") or {}
-    band = band_for_oz(oz)
-    for section in ("core", "heavy"):
-        row = (table.get(section) or {}).get(band)
-        if row and row.get(group) is not None:
-            return round(float(row[group]) * 100)
-    over = (table.get("over_max") or {}).get(group)
-    return None if over is None else round(float(over) * 100)
+    return zone_rate_cents(oz, group, rates.get("rate_table") or {})
