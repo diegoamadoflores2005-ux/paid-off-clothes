@@ -81,7 +81,8 @@ def main():
         print(f"  {g:<5} zones {', '.join(map(str, zs.get('zones', []))):<10} {zs.get('note','')}")
     print()
 
-    ref = [q for q in rates.get("quotes", []) if q.get("use") == "reference only"]
+    ref = [q for q in rates.get("quotes", [])
+           if str(q.get("use", "")).startswith("reference only")]
     if ref:
         print("Held as reference, deliberately not in the table:")
         for q in ref:
@@ -96,16 +97,26 @@ def main():
             print(f"  ${q['price_usd']:.2f} at {q['oz']} oz to {q['dest_zip']} — {zone}; {weighed}")
         print()
 
-    # Side-by-side carrier quotes for one lane. Only the row matching this file's `carrier` can
-    # ever reach the table — a ladder built from two carriers prices nothing anyone can buy.
+    # Side-by-side quotes for one lane, in two shapes: several carriers at one weight, or one
+    # carrier at several weights. Only a row matching this file's `carrier` can ever reach the
+    # table — a ladder built from two carriers prices nothing anyone can actually be charged.
     for cmp in rates.get("rate_comparisons", []):
         dims = cmp.get("dims_in_stated")
-        dims_s = "x".join(str(d) for d in dims) + " in (estimated)" if dims else "no dimensions"
-        print(f"Same lane, {cmp['oz']} oz to {cmp['dest_zip']} (zone {cmp['zone']}), {dims_s}:")
-        for q in sorted(cmp.get("quotes", []), key=lambda q: q["price_usd"]):
-            mark = "  <- table" if q["carrier"] in (rates.get("carrier") or "") and \
-                q["service"] in (rates.get("carrier") or "") else ""
-            print(f"  ${q['price_usd']:>5.2f}  {q['carrier']} {q['service']}{mark}")
+        dims_s = ("x".join(str(d) for d in dims) + " in (estimated)") if dims else "no dimensions"
+        lane = f"to {cmp['dest_zip']} (zone {cmp['zone']}), {dims_s}"
+        if cmp.get("quotes"):
+            print(f"Same lane at {cmp['oz']} oz, {lane}:")
+            for q in sorted(cmp["quotes"], key=lambda q: q["price_usd"]):
+                ours = f"{q['carrier']} {q['service']}" == (rates.get("carrier") or "")
+                print(f"  ${q['price_usd']:>5.2f}  {q['carrier']} {q['service']}"
+                      + ("  <- the only one eligible for the table" if ours else ""))
+        if cmp.get("results"):
+            print(f"{cmp.get('purpose', 'Same lane, several weights')} — "
+                  f"{cmp.get('carrier','')} {cmp.get('service','')} {lane}:")
+            for r in sorted(cmp["results"], key=lambda r: r["oz"]):
+                print(f"  ${r['price_usd']:>5.2f}  at {r['oz']} oz")
+        if cmp.get("finding"):
+            print(f"  => {cmp['finding']}")
         print()
 
     # A conflict is the kind of thing that must be in front of you every time, not filed away.

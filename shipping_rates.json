@@ -72,14 +72,16 @@
       "service": "USPS Ground Advantage",
       "collected": "2026-09-16",
       "source": "Pirate Ship, verified quote supplied by owner",
-      "use": "rate_table",
+      "use": "reference only — superseded",
       "notes": [
         "Fills core.sub.near and nothing else.",
         "weighed is null: not stated. It matters less here than usual — 12.8 oz leaves 3.2 oz of",
         "headroom to the 15.99 oz band edge, so a modest weighing error stays in the same band.",
         "dims_in not stated. Under a pound in a flat mailer dimensional weight rarely applies, but",
-        "the shoe and bag bands will need real box dimensions."
-      ]
+        "the shoe and bag bands will need real box dimensions.",
+        "SUPERSEDED. Two fresh quotes on this exact lane both returned $5.83, so this figure is the outlier and is no longer in the table. Kept because its cause was never explained, and because it was collected in the same session as the 2 lb quote."
+      ],
+      "superseded_by": "The 2026-09-18 controlled test: $5.83 at both 8 oz and 12.8 oz."
     },
     {
       "price_usd": 9.15,
@@ -144,7 +146,7 @@
     "_note": "null means no quote yet. Nothing here is inferred from a neighbouring cell, and no cell is filled by interpolation. 1 lb is absent on purpose: no basket of 7/10/32/40 oz goods plus 3 oz packaging weighs exactly 16 oz, so that band is unreachable.",
     "core": {
       "sub": {
-        "near": 5.4,
+        "near": 5.83,
         "mid": null,
         "far": null
       },
@@ -1190,7 +1192,7 @@
         "$5.40 at 12.8 oz (2026-09-16, no dimensions recorded)",
         "$5.83 at 8 oz (2026-09-18, 12x10 estimated mailer)"
       ],
-      "status": "OPEN — this one is genuinely USPS vs USPS",
+      "status": "RESOLVED — sub-1-lb is flat; the $5.40 is the outlier",
       "why_it_matters": [
         "Same carrier, same service, same origin, same destination, same zone, both under a pound.",
         "The LIGHTER parcel quoted HIGHER: 8 oz at $5.83 against 12.8 oz at $5.40. Weight alone",
@@ -1206,7 +1208,33 @@
         "were recorded for it, which is why this cannot be settled from the file."
       ],
       "to_resolve": "Re-quote BOTH weights (8 oz and 12.8 oz) in one sitting with the same stated dimensions, and record the exact service name Pirate Ship shows for each line.",
-      "meanwhile": "core.sub.near is left at $5.40 and NOT overwritten — picking between two unexplained figures would bury the question rather than answer it."
+      "meanwhile": "core.sub.near is left at $5.40 and NOT overwritten — picking between two unexplained figures would bury the question rather than answer it.",
+      "resolution": [
+        "Both 8 oz and 12.8 oz quoted $5.83 in one sitting on the same lane, on a service line the owner read as plain 'Ground Advantage'.",
+        "That rules out the cubic-pricing hypothesis (cubic would have shown as its own service line) and rules out weight as the cause, since weight demonstrably moves nothing below a pound.",
+        "It also inverts which figure is doubtful. $5.83 is now corroborated twice, with dimensions stated and the service named. $5.40 stands alone: one quote, no dimensions, no service line read back, and contradicted by both of today's.",
+        "core.sub.near is therefore set to 5.83. The $5.40 is demoted to reference only.",
+        "The cause of the $5.40 is still unknown. That is acceptable for the table — the table now rests on the corroborated figure, not on the unexplained one — but see the open item on the 2 lb quote, which came from the same session."
+      ]
+    },
+    {
+      "cell": "2 lb / near (zone 4)",
+      "quotes": [
+        "$9.15 at 32 oz (2026-09-16)"
+      ],
+      "status": "OPEN — unverified by association, not contradicted",
+      "why_it_matters": [
+        "Nothing disagrees with $9.15. The concern is its provenance: it was collected in the",
+        "same 2026-09-16 Pirate Ship session as the $5.40, and that figure has now been shown",
+        "to be wrong by two fresh quotes without anyone establishing WHY it was wrong.",
+        "Whatever produced a low sub-1-lb number that day — a different service line, a promo,",
+        "a mistyped origin, a stale browser tab — could have produced a low 2 lb number too.",
+        "An unexplained error is not safely assumed to be a one-off.",
+        "This is the shop's exposure, not the buyer's: an under-quote means the shop eats the",
+        "difference on every order in the band, which is the direction that costs money quietly."
+      ],
+      "to_resolve": "Re-quote 2 lb (32 oz) to 90210 with the same 12x9x3 box, reading the service line back. If it returns $9.15 the cell is corroborated and the 16 Sept session was fine apart from the one figure; if it returns something else, every quote from that session is suspect and the table starts from today.",
+      "meanwhile": "core.2.near stays at $9.15. It is the only figure on file for that cell and nothing contradicts it — but it is corroborated once less than the sub band."
     }
   ],
   "zone_map_source": {
@@ -1286,6 +1314,43 @@
         }
       ],
       "applies_to_table": "USPS Ground Advantage $5.83 only. The table is defined as one carrier and one service; mixing in a UPS price would make the ladder incoherent and would not match what the checkout panel tells the buyer it is quoting."
+    },
+    {
+      "collected": "2026-09-18",
+      "purpose": "Controlled test: does weight move the price at all below 1 lb?",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "group": "near",
+      "band": "sub",
+      "carrier": "USPS",
+      "service": "Ground Advantage",
+      "service_line_confirmed": "Ground Advantage — NOT Ground Advantage Cubic. Owner read the service name off each line, which is what rules cubic pricing out.",
+      "dims_in_stated": [
+        12,
+        10,
+        1
+      ],
+      "dims_note": "The dimensions this test asked for. The owner confirmed the two prices and the service name; they did not separately restate the dimensions. Still estimates — no mailer has been measured.",
+      "results": [
+        {
+          "oz": 8,
+          "price_usd": 5.83
+        },
+        {
+          "oz": 12.8,
+          "price_usd": 5.83
+        }
+      ],
+      "finding": "Identical price at 8 oz and 12.8 oz. Sub-1-lb Ground Advantage IS flat within a zone for this account, so the single 'under 1 lb' band is structurally correct and does not need splitting into 4/8/12/15.99 oz.",
+      "applies_to_table": "core.sub.near = 5.83"
     }
-  ]
+  ],
+  "band_shape_verified": {
+    "sub_1lb_is_flat": true,
+    "verified_on": "2026-09-18",
+    "how": "Two weights (8 oz and 12.8 oz) quoted in one sitting, same lane, same stated dimensions, same service line. Both $5.83.",
+    "scope": "Verified for zone 4 / near only. Mid and far are assumed to behave the same way because the flat-rate change is national, but neither has been tested. Quote two weights for the first mid and the first far quote too, and this becomes settled rather than assumed.",
+    "why_it_matters": "This is the assumption the whole first row of the table rests on. Had it been false, every sub-1-lb cell would need four quotes instead of one."
+  }
 }
