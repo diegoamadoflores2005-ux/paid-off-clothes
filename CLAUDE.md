@@ -351,15 +351,46 @@ second implementation in the browser: that is how a displayed figure and a charg
 `setCheckoutShipping()` is the single writer for the shipping line, the total and the button
 amount, so those three can never disagree on screen.
 
-**`zone_pricing_ready()` is all-or-nothing.** It requires a non-empty `zone_map` AND every core and
-fallback cell in `shipping_rates.json` to hold a price. Until then every order prices off the flat
-ladder. A partly-filled table would price two identical baskets by different rules depending on
-which cell happened to be filled, with nothing on the page to say so.
+**`zone_pricing_ready()` is all-or-nothing.** It requires a non-empty `zone_map`, every core and
+fallback cell in `shipping_rates.json` holding a price, `rate_table_problems()` empty, and every
+filled cell backed by a verified `cell_provenance` entry on the table's own service and rate basis.
+Until then every order prices off the flat ladder. A partly-filled table would price two identical
+baskets by different rules depending on which cell happened to be filled, with nothing on the page
+to say so — and a *completely* filled one can still be holding a mistake, which is why soundness and
+provenance are part of "ready" rather than a warning printed somewhere.
+
+**The table is one carrier, one service, one rate basis.** `carrier` / `service` / `rate_basis` are
+separate fields because "USPS Ground Advantage" as a single string could not express the distinction
+that actually bit: **Ground Advantage Cubic is a different product**, priced on the box's volume in
+0.1 cu ft increments and flat across weight up to 20 lb (max 22 in any dimension, 1.0 cu ft, 20 lb).
+Pirate Ship rate shops Cubic against weight-based automatically and shows whichever is cheaper, so
+cubic prices arrive without anyone asking for them — that is where seven quotes at a flat $5.93
+across 3–9 lb came from. A volume-priced figure in a weight-indexed band is not a slightly-wrong
+price, it is a price for a different variable. See [SHIPPING.md](SHIPPING.md) for what that means for
+the whole table's shape.
+
+**`rate_table_problems()` rejects a table that cannot be right**: postage falling as weight rises
+(the exact shape a cubic quote makes next to a weight-based one), a nearer zone costing more than a
+further one, or an over-max fallback undercutting the band it backs up. Nothing caught any of this
+before — a 2 lb cell at $9.15 sat above 3, 4 and 5 lb cells at $5.93 and the code was happy.
+
+**An unquoted pound rounds UP into the table, never out of it.** `zone_rate_cents()` walks
+`table_bands()` for the cheapest band at or above the parcel's billable pound. It used to look up
+the exact band and, finding none, drop straight to `over_max` — the fallback for parcels heavier than
+the whole table and the dearest cell in it. Bands 1, 10, 12, 14 and 15 have no row, so a 10 lb order
+paid the over-max price while an 11 lb order paid the 11 lb rate, and a parcel of exactly 16.0 oz
+paid it too.
 
 **A zone is never inferred from distance.** `zone_for_zip()` reads `zone_map`, keyed on the
 destination's first three digits. USPS publishes the chart per origin; mileage only approximates
 it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
 neighbouring zone's price.
+
+**Rate table or rate API?** [SHIPPING.md](SHIPPING.md) has the worked answer. In short: Pirate Ship
+has no rating API, Shippo does and fits the urllib pattern at 1¢ per rate — but Shippo's rates are
+not Pirate Ship's, so quoting on one and buying labels on the other reintroduces the displayed-versus-
+charged drift this codebase refuses everywhere else. Quote and buy on the same provider, or keep both
+on Pirate Ship.
 
 ## Shipping labels (Pirate Ship)
 
