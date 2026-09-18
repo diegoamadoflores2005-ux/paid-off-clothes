@@ -267,6 +267,20 @@ engine must keep it that way, or the page shows one number and the card is charg
 `shipping_rates.json` holds the verified quotes; `python3 tools/shipping_gaps.py` says what is
 still missing. Nothing in that file drives the site yet.
 
+**The zone chart comes first.** Zone pricing cannot switch on without it, and you cannot even
+choose which destinations to quote for *mid* and *far* until you know which prefixes land there.
+Get it from postcalc.usps.com/DomesticZoneChart with origin **856**, then:
+
+```bash
+python3 tools/import_zone_chart.py chart.csv --dry-run   # check it parsed
+python3 tools/import_zone_chart.py chart.csv             # write zone_map
+pbpaste | python3 tools/import_zone_chart.py -           # or straight off the clipboard
+```
+
+It refuses a truncated paste and a chart carrying two zones for one prefix, because a partial map
+would quote some buyers by zone and drop the rest to the flat ladder with nothing on the page to
+say so.
+
 ## Going live
 
 **Not yet — this needs the owner's say-so, and a deploy.** When that day comes:
