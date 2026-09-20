@@ -151,22 +151,22 @@
         "far": null
       },
       "2": {
-        "near": 9.15,
+        "near": null,
         "mid": null,
         "far": null
       },
       "3": {
-        "near": null,
+        "near": 6.33,
         "mid": null,
         "far": null
       },
       "4": {
-        "near": null,
+        "near": 6.4,
         "mid": null,
         "far": null
       },
       "5": {
-        "near": null,
+        "near": 7.03,
         "mid": null,
         "far": null
       },
@@ -1355,6 +1355,42 @@
       ],
       "finding": "Identical price at 8 oz and 12.8 oz. Sub-1-lb Ground Advantage IS flat within a zone for this account, so the single 'under 1 lb' band is structurally correct and does not need splitting into 4/8/12/15.99 oz.",
       "applies_to_table": "core.sub.near = 5.83"
+    },
+    {
+      "collected": "2026-09-20",
+      "purpose": "Per-pound weight-based prices, replacing the flat $5.93 reported for 3-5 lb",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "group": "near",
+      "carrier": "USPS",
+      "service": "Ground Advantage",
+      "dims_in_stated": [
+        12,
+        19,
+        3
+      ],
+      "dims_note": "Still the estimated box. No mailer has been measured.",
+      "results": [
+        {
+          "oz": 48,
+          "price_usd": 6.33,
+          "lb_provisional": 3
+        },
+        {
+          "oz": 64,
+          "price_usd": 6.4,
+          "lb_provisional": 4
+        },
+        {
+          "oz": 80,
+          "price_usd": 7.03,
+          "lb_provisional": 5
+        }
+      ],
+      "finding": "Ascending, as weight-based pricing must be, and all three below the $8.56 Cubic price for this box — so weight-based legitimately wins at 3-5 lb and the crossover still sits between 5 and 6 lb. The earlier flat $5.93 across all three is retired: these numbers replace it and none of them is $5.93.",
+      "open_question": "Which pound each price belongs to. The order is stated, not demonstrated. The step shape is also lumpy — +$0.07 from the first to the second, then +$0.63 — which is not impossible but is worth a second look.",
+      "applies_to_table": "core.3/4/5.near, entered UNVERIFIED pending one discriminating re-quote."
     }
   ],
   "band_shape_verified": {
@@ -1397,14 +1433,47 @@
       "dest_zip": "90210",
       "evidence": "Two weights (8 oz, 12.8 oz) quoted in one sitting both returned $5.83, and the owner read the service line back as plain Ground Advantage."
     },
-    "core.2.near": {
+    "core.3.near": {
       "verified": false,
       "service": "Ground Advantage",
       "rate_basis": "weight",
-      "price_usd": 9.15,
-      "quoted_on": "2026-09-16",
+      "price_usd": 6.33,
+      "quoted_on": "2026-09-20",
       "dest_zip": "90210",
-      "why_unverified": "$9.15 at 2 lb sits above $5.93 at 3 lb, and both are now claimed to be weight-based Ground Advantage on the same lane — a 3 lb parcel cannot cost less than a 2 lb one on one service, so at most one of the two is what it says it is. Both were also quoted in Cubic-eligible boxes with Pirate Ship showing whichever line was cheaper, so neither can be assumed weight-based just because a weight was typed in to get it."
+      "dims_in": [
+        12,
+        19,
+        3
+      ],
+      "why_unverified": "The price is measured; the WEIGHT it belongs to is not. The owner supplied $6.33/$6.40/$7.03 as 3/4/5 lb 'provisionally' and asked for confirmation first. Three ascending prices are consistent with that order but cannot prove the mapping — any three ascending numbers would look identical. One discriminating re-quote settles it; until then a wrong assignment would shift every cell by a pound."
+    },
+    "core.4.near": {
+      "verified": false,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 6.4,
+      "quoted_on": "2026-09-20",
+      "dest_zip": "90210",
+      "dims_in": [
+        12,
+        19,
+        3
+      ],
+      "why_unverified": "The price is measured; the WEIGHT it belongs to is not. The owner supplied $6.33/$6.40/$7.03 as 3/4/5 lb 'provisionally' and asked for confirmation first. Three ascending prices are consistent with that order but cannot prove the mapping — any three ascending numbers would look identical. One discriminating re-quote settles it; until then a wrong assignment would shift every cell by a pound."
+    },
+    "core.5.near": {
+      "verified": false,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 7.03,
+      "quoted_on": "2026-09-20",
+      "dest_zip": "90210",
+      "dims_in": [
+        12,
+        19,
+        3
+      ],
+      "why_unverified": "The price is measured; the WEIGHT it belongs to is not. The owner supplied $6.33/$6.40/$7.03 as 3/4/5 lb 'provisionally' and asked for confirmation first. Three ascending prices are consistent with that order but cannot prove the mapping — any three ascending numbers would look identical. One discriminating re-quote settles it; until then a wrong assignment would shift every cell by a pound."
     }
   },
   "quarantined_quotes": [
@@ -1432,16 +1501,13 @@
         "9"
       ],
       "known_prices": {
-        "3": 5.93,
-        "4": 5.93,
-        "5": 5.93,
         "6": 8.56,
         "7": 8.56,
         "8": 8.56,
         "9": 8.56
       },
       "prices_not_supplied": [],
-      "status": "QUARANTINED — service names now known, 3/4/5 lb prices still ambiguous",
+      "status": "PARTLY RESOLVED — the 3-5 lb rows are superseded by real per-pound quotes; the 6-9 lb Cubic rows at $8.56 still stand and still need a measured box",
       "why": [
         "Two services, read off the screen: 3-5 lb is weight-based Ground Advantage at $5.93,",
         "6-9 lb is Ground Advantage CUBIC at $8.56. A single-service weight table cannot hold",
@@ -1481,7 +1547,8 @@
         "3-5 lb weight-based beat $8.56; 6-9 lb it did not. The crossover sits between 5 and 6 lb.",
         "That is coherent, and it is the real cost model for anyone buying the cheapest line."
       ],
-      "the_one_thing_that_cannot_be_right": "$5.93 at 3 lb AND 4 lb AND 5 lb. Weight-based Ground Advantage is priced on the rounded-up pound and strictly increases, so three pounds cannot share a price. Either only one of those three was actually read and carried across the other two, or the 4 and 5 lb figures differ and were not written down. Nothing is entered until that is settled: a wrong 4 lb cell is a real overcharge or undercharge on every order in it."
+      "the_one_thing_that_cannot_be_right": "$5.93 at 3 lb AND 4 lb AND 5 lb. Weight-based Ground Advantage is priced on the rounded-up pound and strictly increases, so three pounds cannot share a price. Either only one of those three was actually read and carried across the other two, or the 4 and 5 lb figures differ and were not written down. Nothing is entered until that is settled: a wrong 4 lb cell is a real overcharge or undercharge on every order in it.",
+      "superseded_by": "The 2026-09-20 per-pound quotes: $6.33/$6.40/$7.03 at 3/4/5 lb. The flat $5.93 was not the weight-based price at any of those pounds, which confirms it was one figure carried across three rows."
     }
   ],
   "intended_rate_basis": "cheapest_available",
@@ -1493,5 +1560,30 @@
     "dims_in": null,
     "verified": false,
     "why_it_is_mandatory": "Under 'cheapest_available' half the ladder is Cubic, and Cubic is charged on the box's volume. The table is only a function of weight while the box is fixed, so the box has to be a measured standard — not the per-quote estimate it is today."
-  }
+  },
+  "rejected_quotes": [
+    {
+      "price_usd": 9.15,
+      "oz": 32,
+      "cell": "core.2.near",
+      "collected": "2026-09-16",
+      "dest_zip": "90210",
+      "dims_in": [
+        12,
+        9,
+        3
+      ],
+      "claimed_service": "USPS Ground Advantage",
+      "status": "REJECTED — cannot be a weight-based Ground Advantage 2 lb rate",
+      "why": [
+        "3 lb on the same lane is $6.33. A 2 lb parcel cannot cost more than a 3 lb one on the",
+        "same service, so $9.15 is not that service's 2 lb price. This is no longer a suspicion",
+        "that needed a re-quote to settle — the 3 lb figure settles it.",
+        "Removed from the table rather than left flagged. A number known to be wrong is worse in",
+        "a cell than an empty cell is: the empty one already blocks zone pricing and cannot be",
+        "misread later as 'the 2 lb rate we measured'."
+      ],
+      "hypothesis": "The 2026-09-18 four-way comparison on this lane recorded USPS Priority Mail at $9.22 for 8 oz. $9.15 for 2 lb is in that neighbourhood, so the likeliest explanation is that the Priority Mail line was read instead of Ground Advantage. Unconfirmed, and it does not need confirming — the figure is out either way. Recorded because it points at what to watch for when quoting."
+    }
+  ]
 }
