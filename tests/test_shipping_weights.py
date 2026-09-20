@@ -373,6 +373,19 @@ class TestZonePricing(unittest.TestCase):
         self.assertEqual(orders.band_for_oz(38), "3")
         self.assertEqual(orders.band_for_oz(143), "9", "20 shirts is a 9 lb parcel")
 
+    def test_a_half_pound_bills_at_the_pound_above_it(self):
+        """Checked against the carrier, not just the documentation.
+
+        3.5 lb on 85641 -> 90210 quoted $6.40, the 4 lb rate, rather than $6.33 at 3 lb. Everything
+        in the band model leans on this: band_for_oz rounds up, the table is indexed on whole
+        pounds, and an unquoted pound charges the next band up. If billing rounded down or prorated
+        instead, all three would be wrong.
+        """
+        orders = load_orders()
+        self.assertEqual(orders.band_for_oz(3.5 * 16), "4")
+        self.assertEqual(orders.band_for_oz(49), "4", "one ounce over 3 lb is already a 4 lb parcel")
+        self.assertEqual(orders.band_for_oz(64), "4", "exactly 4 lb stays in the 4 lb band")
+
     def test_above_the_top_band_uses_the_fallback_for_that_group(self):
         orders = self._with_rates(self._full_table())
         self.assertEqual(orders.zone_shipping_cents(400, "90210"), 3000)

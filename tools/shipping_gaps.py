@@ -159,6 +159,8 @@ def main():
         print()
 
     for q in rates.get("quarantined_quotes", []):
+        if str(q.get("status", "")).startswith("RESOLVED"):
+            continue
         dims = q.get("dims_in_stated") or []
         print(f"~~ QUARANTINED: {len(q.get('bands_quoted', []))} quotes at "
               f"{'x'.join(map(str, dims))} in, not entered in the table")
