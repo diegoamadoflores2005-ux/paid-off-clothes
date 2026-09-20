@@ -1715,5 +1715,44 @@
       "status": "OPEN — a business decision, not a code change. Not blocking the mid column.",
       "related": "Prefix 967 (Hawaii) is still in manual_review from the chart import, unverified."
     }
+  },
+  "how_to_get_weight_based_quotes": {
+    "problem": "Pirate Ship collapses Ground Advantage into ONE row and rate shops Weight-Based against Cubic behind it, showing only the winner. There is no toggle. Both boxes tried — 12x19x3 and 12x12x3 — are small, and Cubic gets CHEAPER as volume falls, so shrinking the box made Cubic win harder. The instinct was backwards.",
+    "method": {
+      "box": [
+        12,
+        12,
+        11
+      ],
+      "cubic_in": 1584,
+      "cubic_ft": 0.92,
+      "forces_cubic_tier": 1.0,
+      "why_it_works": [
+        "0.92 cu ft rounds up to the 1.0 cu ft Cubic tier, the most expensive one there is, so Cubic stops undercutting weight-based and the weight-based line surfaces.",
+        "1584 cu in stays under the 1728 cu in (1 cu ft) threshold, so NO dimensional weight is applied — the rate sheet gives the divisor as L x W x H / 139.",
+        "Longest side 12 in stays under the 22 in limit, so no nonstandard-length surcharge.",
+        "Nothing is misrepresented and no fee is introduced. The parcel is simply one that Cubic prices badly."
+      ],
+      "verify_by": "Re-quote a weight already known at the near lane. 2 lb to 90210 is $6.03 on weight-based. If 12x12x11 returns $6.03 too, the box provably does not affect weight-based pricing and the technique is sound for every column."
+    },
+    "rejected_alternatives": [
+      "A box over 1 cu ft disqualifies Cubic but triggers dimensional weight, which inflates the billed weight and yields a rate for a parcel that does not exist.",
+      "A side over 22 in disqualifies Cubic but adds USPS's nonstandard-length surcharge, which contaminates the price the same way.",
+      "The published Pirate Ship rate spreadsheet — see published_rate_sheet below."
+    ]
+  },
+  "published_rate_sheet": {
+    "url": "https://d9fq664bu2chm.cloudfront.net/pirateship/sheets/PirateShip-August-22-2026-USPS-Rates.xlsx",
+    "effective": "2026-08-22",
+    "verdict": "NOT USABLE as a source of rates for this table.",
+    "why": [
+      "Everything above 1 lb is redacted. Each cell literally reads 'Less than ...' rather than a number, because Pirate Ship is not permitted to advertise its below-Commercial pricing. The entire Cubic sheet is redacted the same way.",
+      "The figures it does print are the advertised rates, not this account's. It lists 5-8 oz zone 4 at $7.46; the real quote on that lane was $5.83. Using the sheet would overcharge every customer by roughly $1.63 in that band alone."
+    ],
+    "useful_anyway": [
+      "Confirms sub-1-lb is genuinely flat: 1-4, 5-8, 9-12 and 13-15.99 oz all carry one price per zone. That was established here by quoting two weights; this is independent agreement.",
+      "Gives the dimensional-weight divisor as 139, and confirms it applies only above 1 cu ft.",
+      "Zone 8 and zone 9 carry the SAME price in both visible rows ($8.40 and $10.67). If that holds above 1 lb, the far group's zone 9 problem dissolves — a zone 8 quote would cover zone 9 exactly. Only demonstrated at or below 1 lb, so it is a lead, not a finding."
+    ]
   }
 }
