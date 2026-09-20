@@ -386,6 +386,42 @@ destination's first three digits. USPS publishes the chart per origin; mileage o
 it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
 neighbouring zone's price.
 
+**Never hand-enter a quote — use `python3 tools/record_quote.py`.** Every fault this table has
+had was findable at collection time and was instead found days later: a UPS price filed as USPS, a
+Cubic price filed as weight-based, a 2 lb rate above the 3 lb one, one figure carried across three
+pounds. The tool refuses a quote that cannot be right and names the rule broken — unmapped ZIP, a
+group quoted below its dearest zone, a service this table cannot hold, a package that triggers a
+USPS surcharge (>22 in is $4.50, >2 cu ft is $21, dimensional weight above 1728 cu in to zones 5–9
+at divisor 139), a price that breaks ladder monotonicity, or a disagreement with a cell already
+filled. `--next` prints what to collect and how; `--record` writes the cell and its provenance only
+if every check passes. **Record every service line on the screen, not just the one you would buy** —
+one number cannot be checked against anything, several diagnose themselves.
+
+**Pirate Ship shows only the winner of its own rate shopping.** Ground Advantage is one row, and
+behind it Weight-Based competes with Cubic. There is no toggle. Cubic gets *cheaper as volume falls*,
+so shrinking the box makes Cubic win harder — the instinct is backwards. To surface the weight-based
+line, quote in a box as close to 1.0 cu ft as possible **without** exceeding it: that puts Cubic at
+its dearest tier while staying under the 1728 cu in dimensional-weight threshold and the 22 in
+length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
+revealing it.
+
+**The published Pirate Ship rate spreadsheet is not a source of rates.** Everything above 1 lb reads
+"Less than …" rather than a number, because they may not advertise below-Commercial pricing, and the
+whole Cubic sheet is redacted the same way. What it does print are advertised rates, not this
+account's — it lists 5–8 oz zone 4 at $7.46 where the real quote was $5.83. It is still worth
+reading: it independently confirms sub-1-lb is flat across 1–4/5–8/9–12/13–15.99 oz, gives the
+dimensional divisor as 139, and shows zone 8 and zone 9 at identical prices in both visible rows.
+
+**A banded group must be quoted at its dearest zone** — near 4, mid 6, far **9**. One price covers
+the whole group, so quoting lower ships every order beyond it below cost, silently. `worst_case_zone()`
+derives this from `zone_map`, and `unverified_cells()` rejects a cell quoted below it. Note that far
+reaches zone 9 because prefix 969 (the Pacific territories) sits in that band.
+
+**`shipping_rates.json` is in `PRIVATE_FILES`.** The browser never reads it — the cart prices off the
+flat ladder and the checkout figure comes from `/api/shipping/quote` — so serving it is pure downside.
+It holds negotiated rates and the shipping origin ZIP. Note this stops the *storefront* serving it;
+the file is still tracked in a public repo by design, since it is the project's data.
+
 **Rate table or rate API?** [SHIPPING.md](SHIPPING.md) has the worked answer: **keep the table, fix
 the box, skip the API.** There is no Shippo integration in this repo and there should not be one yet.
 Pirate Ship rate shops weight-based Ground Advantage against Cubic and sells the winner, so the

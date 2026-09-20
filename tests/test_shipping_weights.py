@@ -18,6 +18,7 @@ in KNOWN_MISSING_POUNDS below, so the current gap is recorded as a fact rather t
 
     python3 tests/test_shipping_weights.py
 """
+import argparse
 import json
 import os
 import re
@@ -663,6 +664,139 @@ class TestZonePricing(unittest.TestCase):
         rates["rate_table"]["core"]["6"]["near"] = 1.00
         self.assertTrue([p for p in orders.rate_table_problems(rates) if "near:" in p],
                         "a plateau that DROPS below the band before it is still a fault")
+
+
+class TestRatesAreNotServed(unittest.TestCase):
+    """shipping_rates.json must not be reachable over HTTP.
+
+    The browser never reads it: the cart prices off the flat ladder in script.js and the checkout
+    figure comes from /api/shipping/quote, computed server-side. So serving it is pure downside. It
+    carries the below-Commercial rates Pirate Ship states it may not advertise, and the shipping
+    origin ZIP, which for a business run from home is a home address.
+    """
+
+    def test_it_is_in_private_files(self):
+        src = open(os.path.join(APP_DIR, "server.py"), encoding="utf-8").read()
+        block = src[src.index("PRIVATE_FILES = {"):src.index("PRIVATE_DIRS")]
+        self.assertIn('"shipping_rates.json"', block)
+
+    def test_the_front_end_does_not_fetch_it(self):
+        """If this ever fails, the file has to be served and the guard above must be reconsidered."""
+        for name in ("script.js", "index.html"):
+            with self.subTest(file=name):
+                src = open(os.path.join(APP_DIR, name), encoding="utf-8").read()
+                self.assertNotIn("shipping_rates", src)
+
+
+class TestQuoteValidator(unittest.TestCase):
+    """tools/record_quote.py — the check that runs while the screen is still in front of you.
+
+    Every fault this table has had was findable at collection time and was instead found days
+    later: a UPS price filed as USPS, a Cubic price filed as weight-based, a 2 lb rate above the
+    3 lb one. These assert the validator catches each of those shapes.
+    """
+
+    def setUp(self):
+        import types as _types
+        path = os.path.join(APP_DIR, "tools", "record_quote.py")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        mod = _types.ModuleType("record_quote_under_test")
+        mod.__file__ = path
+        exec(compile(src, path, "exec"), mod.__dict__)
+        self.rq = mod
+        self.orders = load_orders()
+
+    def _rates(self):
+        bands = ["sub"] + [str(b) for b in range(2, 10)]
+        return {
+            "origin_zip": "85641", "carrier": "USPS", "service": "Ground Advantage",
+            "rate_basis": "weight",
+            "zone_groups": {"near": {"zones": [1, 2, 3, 4]}, "mid": {"zones": [5, 6]},
+                            "far": {"zones": [7, 8, 9]}},
+            "zone_map": {"902": 4, "857": 2, "800": 5, "980": 6, "100": 8},
+            "rate_table": {
+                "core": dict({b: {"near": None, "mid": None, "far": None} for b in bands},
+                             **{"3": {"near": 6.33, "mid": None, "far": None}}),
+                "heavy": {}, "over_max": {"near": None, "mid": None, "far": None},
+            },
+            "cell_provenance": {},
+        }
+
+    def _check(self, rates, **kw):
+        args = argparse.Namespace(dest=kw.get("dest", "90210"), oz=kw.get("oz", 32),
+                                  box=kw.get("box", "12x12x11"), line=kw.get("line", []),
+                                  record=False, next=False)
+        return self.rq.check(args, rates, self.orders)
+
+    def test_a_clean_quote_passes(self):
+        problems, _n, chosen, cell = self._check(
+            self._rates(), oz=64, line=["USPS/Ground Advantage/6.90"])
+        self.assertEqual(problems, [])
+        self.assertEqual(cell, "core.4.near")
+        self.assertEqual(chosen["price_usd"], 6.90)
+
+    def test_a_cubic_only_screen_is_refused_with_the_reason(self):
+        problems, _n, _c, _k = self._check(
+            self._rates(), box="12x12x3", line=["USPS/Ground Advantage Cubic/7.10"])
+        self.assertTrue(problems)
+        self.assertTrue(any("BIGGER box" in p for p in problems),
+                        "it must say how to make the weight-based line surface")
+
+    def test_another_carrier_cannot_fill_a_cell(self):
+        """The first conflict in this file was a UPS price recorded as a USPS rate."""
+        problems, _n, _c, _k = self._check(self._rates(), line=["UPS/Ground Saver/5.92"])
+        self.assertTrue(any("may fill a cell" in p for p in problems))
+
+    def test_a_group_quoted_below_its_worst_zone_is_refused(self):
+        problems, _n, _c, _k = self._check(
+            self._rates(), dest="80001", line=["USPS/Ground Advantage/7.20"])
+        self.assertTrue(any("dearest zone" in p for p in problems),
+                        f"expected a worst-case-zone refusal, got {problems}")
+
+    def test_a_price_that_breaks_the_ladder_is_refused(self):
+        problems, _n, _c, _k = self._check(
+            self._rates(), oz=80, line=["USPS/Ground Advantage/5.00"])
+        self.assertTrue(any("break the ladder" in p for p in problems))
+
+    def test_a_surcharged_package_is_refused(self):
+        """A 23-inch side disqualifies Cubic but adds $4.50, so the number is contaminated."""
+        problems, _n, _c, _k = self._check(
+            self._rates(), box="23x4x4", line=["USPS/Ground Advantage/9.00"])
+        self.assertTrue(any("nonstandard length" in p for p in problems))
+
+    def test_an_oversize_package_is_refused(self):
+        problems, _n, _c, _k = self._check(
+            self._rates(), box="24x24x24", line=["USPS/Ground Advantage/30.00"])
+        self.assertTrue(any("oversize volume" in p for p in problems))
+
+    def test_a_quote_disagreeing_with_a_filled_cell_is_refused(self):
+        problems, _n, _c, _k = self._check(
+            self._rates(), oz=48, line=["USPS/Ground Advantage/6.99"])
+        self.assertTrue(any("already holds" in p for p in problems))
+
+    def test_a_quote_agreeing_with_a_filled_cell_passes(self):
+        problems, notes, _c, _k = self._check(
+            self._rates(), oz=48, line=["USPS/Ground Advantage/6.33"])
+        self.assertEqual(problems, [])
+        self.assertTrue(any("agrees with it" in n for n in notes))
+
+    def test_an_unmapped_zip_is_refused(self):
+        problems, _n, _c, _k = self._check(
+            self._rates(), dest="59718", line=["USPS/Ground Advantage/7.00"])
+        self.assertTrue(any("not in zone_map" in p for p in problems))
+
+    def test_box_facts_match_the_usps_thresholds(self):
+        f = self.rq.box_facts([12, 12, 11], 4)
+        self.assertTrue(f["cubic_eligible"])
+        self.assertEqual(f["cubic_tier_ft"], 1.0, "0.92 cu ft rounds up to the dearest Cubic tier")
+        self.assertEqual(f["fees_triggered"], [], "this box must introduce no surcharge at all")
+        self.assertEqual(self.rq.box_facts([12, 12, 11], 6)["fees_triggered"], [],
+                         "under 1728 cu in, dim weight must not apply even in zones 5-9")
+        self.assertTrue(self.rq.box_facts([13, 13, 13], 6)["fees_triggered"],
+                        "over 1728 cu in to zone 6 must flag dimensional weight")
+        self.assertEqual(self.rq.box_facts([13, 13, 13], 4)["fees_triggered"], [],
+                         "dim weight applies only to zones 5-9")
 
 
 if __name__ == "__main__":

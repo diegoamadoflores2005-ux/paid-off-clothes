@@ -85,6 +85,12 @@ PRIVATE_FILES = {
     # Supplier costs and landed cost. products.json is fetched by every visitor; this must never
     # be, or the storefront would hand out the margin on every item.
     "costs.json",
+    # Negotiated carrier rates and the shipping origin. The browser never reads this — the cart
+    # prices off the flat ladder in script.js and the checkout figure comes from
+    # /api/shipping/quote, computed server-side — so serving it is pure downside. It holds the
+    # below-Commercial rates Pirate Ship states it is not permitted to advertise, and the origin
+    # ZIP, which for a one-person business run from home is a home address.
+    "shipping_rates.json",
     # The database holds everything the JSON files do PLUS costs, orders and customer emails in
     # one file. Serving it would be the single worst leak in the project.
     "paidoff.db",
