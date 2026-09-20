@@ -1643,5 +1643,77 @@
     "all_verified": true,
     "blocked_above": "6-9 lb is Ground Advantage Cubic at $8.56 for this box. Cubic bills on volume, so those four cells cannot be filled until the real mailer is measured — package_problem() enforces that.",
     "one_lb_gap": "No 1 lb row exists. A parcel of exactly 16.0 oz rounds up to the 2 lb cell and pays $6.03. The true 1 lb rate is somewhere between $5.83 and $6.03, so this is an overcharge of at most 20c and never an undercharge. Worth one quote eventually; not worth blocking on."
+  },
+  "containers": {
+    "_note": "Boxes the shop owns, recorded for reference. NOTHING here is the shipping package until it appears in `quoted_for_package`, which is the only field the rate code reads. Keeping them in separate places is deliberate: the whole Cubic half of the table is a function of the package, so a container promoted by accident would reprice every heavy order.",
+    "inventory_box": {
+      "role": "storage — stock sits in this at home. NOT a shipping package.",
+      "dims_in": [
+        20.5,
+        15.5,
+        10
+      ],
+      "cubic_in": 3177.5,
+      "cubic_ft": 1.84,
+      "measured_on": "2026-09-20",
+      "measured_with": "iPhone Measure app",
+      "accuracy": "approximate — a phone AR measurement, not a tape",
+      "may_unlock_cubic_rates": false,
+      "why_not": [
+        "It is not what anything ships in, which is reason enough on its own.",
+        "It would also fail even if it were: 1.84 cu ft against the 1.0 cu ft Cubic cap, so",
+        "this box cannot produce a Cubic rate at any weight. At 3,178 cu in it is past the",
+        "1,728 cu in threshold too, so it would bill on dimensional weight rather than actual.",
+        "Recorded because knowing a container is ineligible is worth as much as knowing one is",
+        "eligible — it is one fewer thing to re-measure later."
+      ]
+    },
+    "shipping_mailer": {
+      "role": "what orders actually go out in — the one the rate table needs",
+      "dims_in": null,
+      "status": "NOT MEASURED, and possibly not chosen yet",
+      "blocks": "the 6-9 lb Cubic cells only; see rate_basis_plan"
+    }
+  },
+  "rate_basis_plan": {
+    "now": "weight",
+    "later": "cheapest_available",
+    "why_this_order": [
+      "Weight-based Ground Advantage ignores dimensions entirely below 1,728 cu in, so every",
+      "weight-based cell can be quoted TODAY with no package decision at all. The five near cells",
+      "already filled are exactly that, and mid and far can be finished the same way.",
+      "It is also the safe direction. What the shop actually pays is min(weight_based, cubic),",
+      "so a weight-based quote can never be BELOW cost — at worst the customer is charged a",
+      "little more than the cheapest label available, and the shop is never out of pocket.",
+      "Switching to 'cheapest_available' later is an optimisation, not a correction: it lowers",
+      "what customers are charged on heavy orders once a mailer is chosen and measured.",
+      "Doing it in this order means the table can be finished and switched on without waiting on",
+      "a purchase decision."
+    ],
+    "what_the_switch_will_need": [
+      "A chosen, measured shipping mailer in quoted_for_package, verified:true.",
+      "Re-quoting the bands where Cubic wins — 6 lb and up for the box tested so far.",
+      "package_problem() and unverified_cells() already enforce both."
+    ]
+  },
+  "banded_policy_notes": {
+    "rule": "A banded group charges one price, so that price must be quoted at the group's DEAREST zone. Quoting lower ships every order beyond it below cost, silently.",
+    "worst_case_zones": {
+      "near": 4,
+      "mid": 6,
+      "far": 9
+    },
+    "near_already_correct": "90210 is zone 4, the dearest near zone. The five filled cells are sound.",
+    "far_reaches_zone_9": {
+      "finding": "One prefix — 969, the Pacific territories (Guam, Palau, FSM, Marshall Islands) — sits in zone 9, inside the same band as zones 7 and 8.",
+      "consequence": "A far column quoted to New York covers zones 7 and 8 and undercharges every 969 order. Quoting it at zone 9 instead overcharges the east coast, which is almost all of the far group's 497 prefixes, by a lot.",
+      "options": [
+        "Decide not to ship to 969 at all, and quote far at zone 8. One prefix out of 930.",
+        "Quote far at zone 9 and accept overcharging the east coast.",
+        "Split 969 out of the far band into its own group."
+      ],
+      "status": "OPEN — a business decision, not a code change. Not blocking the mid column.",
+      "related": "Prefix 967 (Hawaii) is still in manual_review from the chart import, unverified."
+    }
   }
 }

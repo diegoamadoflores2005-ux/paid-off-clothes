@@ -360,6 +360,52 @@ class TestZonePricing(unittest.TestCase):
             {b: table[b]["near"] for b in ("sub", "2", "3", "4", "5")},
             {"sub": 5.83, "2": 6.03, "3": 6.33, "4": 6.40, "5": 7.03})
 
+    def test_a_group_quoted_below_its_worst_zone_is_rejected(self):
+        """One price per group must cover the group's dearest zone.
+
+        near spans zones 1-4 and was quoted at 90210, which is zone 4 — its worst case. Quoting it
+        at zone 3 instead would ship every zone 4 order below cost, on every order, with nothing on
+        the page or in the order to say which zone it went to.
+        """
+        rates = self._full_table()
+        orders = self._with_rates(rates)
+        self.assertEqual(orders.worst_case_zone("near", rates), 4)
+        self.assertEqual(orders.worst_case_zone("far", rates), 8)
+
+        rates["cell_provenance"]["core.3.near"]["dest_zip"] = "85701"   # zone 1 in this fixture
+        rates["zone_map"]["857"] = 1
+        orders = self._with_rates(rates)
+        self.assertTrue(any(cell == "core.3.near" for cell, _w in orders.unverified_cells(rates)))
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_the_real_far_group_reaches_zone_nine(self):
+        """Recorded so it cannot be forgotten: 'far' is not just the east coast.
+
+        The imported chart puts one prefix — 969, the Pacific territories — in zone 9, inside the
+        same band as zones 7 and 8. A far column quoted to New York covers zones 7 and 8 and
+        undercharges every 969 order. The fix is a business decision (ship there or don't), not a
+        code change, so the test exists to keep the question visible rather than to force an answer.
+        """
+        orders = load_orders()
+        self.assertEqual(orders.worst_case_zone("far"), 9)
+
+    def test_a_storage_container_is_never_the_shipping_package(self):
+        """The inventory box is recorded for reference and must stay out of the rate path.
+
+        `containers` is reference data; `quoted_for_package` is the only thing the rate code reads.
+        Cubic is priced on the package, so a container promoted into that slot by a careless edit
+        would reprice every heavy order against a box nothing ships in. This box would not even be
+        Cubic-eligible — 1.84 cu ft against a 1.0 cu ft cap — so the wrongness would be silent
+        rather than loud.
+        """
+        orders = load_orders()
+        rates = orders.load_rates()
+        inventory = (rates.get("containers") or {}).get("inventory_box") or {}
+        self.assertFalse(inventory.get("may_unlock_cubic_rates", False))
+        shipping = (rates.get("quoted_for_package") or {}).get("dims_in")
+        self.assertNotEqual(shipping, inventory.get("dims_in"),
+                            "the storage container has been set as the shipping package")
+
     def test_the_cubic_bands_are_still_empty(self):
         """6-9 lb quoted $8.56 on Cubic, which bills on volume. Until the mailer is measured those
         cells must stay empty — a volume price for an unmeasured box is not a price."""

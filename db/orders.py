@@ -727,6 +727,21 @@ def package_problem(rates=None):
     return None
 
 
+def worst_case_zone(group, rates=None):
+    """The highest zone inside a banded group, or None if the group prices no mapped zone.
+
+    A banded table charges ONE price per group, so that price has to cover the most expensive zone
+    in it. Quote a group at any zone below its worst case and every order to the zones above pays
+    less postage than the shop is billed — quietly, on every single one, because nothing on the
+    page or in the order says which zone it went to.
+    """
+    rates = load_rates() if rates is None else rates
+    present = set((rates.get("zone_map") or {}).values())
+    zones = [z for z in ((rates.get("zone_groups") or {}).get(group) or {}).get("zones", [])
+             if z in present]
+    return max(zones) if zones else None
+
+
 def allowed_services(rates=None):
     """Which service names may appear in a cell's provenance under this table's rate basis."""
     rates = load_rates() if rates is None else rates
@@ -770,6 +785,13 @@ def unverified_cells(rates=None):
             out.append((key, f"quoted for a {entry.get('dims_in')} package, but the table is "
                              f"declared for {pkg_dims} — a rate-shopped cell is only valid for "
                              f"the box it was quoted in"))
+        else:
+            worst = worst_case_zone(group, rates)
+            quoted = zone_for_zip(entry.get("dest_zip"), rates)
+            if worst is not None and quoted is not None and quoted < worst:
+                out.append((key, f"quoted to zone {quoted}, but {group!r} reaches zone {worst} — "
+                                 f"one price per group has to cover the group's dearest zone, or "
+                                 f"every order beyond it ships below cost"))
     return out
 
 
