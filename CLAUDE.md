@@ -434,6 +434,17 @@ account's — it lists 5–8 oz zone 4 at $7.46 where the real quote was $5.83. 
 reading: it independently confirms sub-1-lb is flat across 1–4/5–8/9–12/13–15.99 oz, gives the
 dimensional divisor as 139, and shows zone 8 and zone 9 at identical prices in both visible rows.
 
+**A three-digit prefix is not a place — check every destination with `--check <ZIP>` before
+quoting.** Birmingham AL is 352 (zone 7, far) and Tuscaloosa AL is 354 (zone 6, mid); they are an
+hour apart and fall either side of the mid/far line. Reading prefixes off the worklist and
+substituting a city you recognise is how a whole column gets quoted to the wrong zone, and the
+quoting is finished before anything notices. That happened. `--check` answers zone, group, whether
+it is that group's dearest zone, and what the group still needs — one command, before any quoting.
+
+**The zone map has been checked against an outside source once.** Pirate Ship independently
+reported zone 7 for 35203, matching the chart import exactly. Until then the map rested entirely on
+the PDF extraction.
+
 **A banded group must be quoted at its dearest zone** — near 4, mid 6, far 8, territories 9. One
 price covers the whole group, so quoting lower ships every order beyond it below cost, silently.
 `worst_case_zone()` derives this from `zone_map`, and `unverified_cells()` rejects a cell quoted

@@ -413,6 +413,20 @@ class TestZonePricing(unittest.TestCase):
                         "no territories rate has been quoted; none may be invented")
         self.assertFalse(orders.zone_pricing_ready())
 
+    def test_neighbouring_prefixes_can_be_in_different_groups(self):
+        """The trap that cost a quoting session: a city name is not a zone.
+
+        Birmingham AL (352) and Tuscaloosa AL (354) are an hour apart and fall either side of the
+        mid/far line. Reading "354, 355, 356" off a list and substituting a city you recognise is
+        how a whole column gets quoted to the wrong zone, and the quoting is done before anyone
+        notices. Pirate Ship reporting zone 7 for 35203 agreed with the map exactly.
+        """
+        orders = load_orders()
+        self.assertEqual(orders.zone_for_zip("35203"), 7, "Birmingham — far, not mid")
+        self.assertEqual(orders.group_for_zone(orders.zone_for_zip("35203")), "far")
+        self.assertEqual(orders.zone_for_zip("35401"), 6, "Tuscaloosa — mid")
+        self.assertEqual(orders.group_for_zone(orders.zone_for_zip("35401")), "mid")
+
     def test_groups_are_ordered_nearest_first(self):
         """rate_table_problems() walks them outward to check postage never falls with distance."""
         orders = load_orders()
@@ -986,6 +1000,20 @@ class TestQuoteValidator(unittest.TestCase):
         self.assertEqual(verdicts[0], [], "the 2 lb row is fine on its own")
         self.assertTrue(any("break the ladder" in p for p in verdicts[1]),
                         "the 3 lb row must fail against the 2 lb row staged before it")
+
+    # ---- the destination check -------------------------------------------------------------------
+    def test_check_accepts_a_group_worst_case_zip(self):
+        rates = self._rates()
+        self.assertEqual(self.rq.cmd_check("90210", rates, self.orders), 0,
+                         "zone 4 is near's dearest zone in this fixture")
+
+    def test_check_rejects_a_zip_below_the_group_worst_case(self):
+        rates = self._rates()
+        self.assertEqual(self.rq.cmd_check("85701", rates, self.orders), 1,
+                         "zone 2 cannot fill a near cell that must cover zone 4")
+
+    def test_check_rejects_an_unmapped_zip(self):
+        self.assertEqual(self.rq.cmd_check("59718", self._rates(), self.orders), 1)
 
     def test_box_facts_match_the_usps_thresholds(self):
         f = self.rq.box_facts([12, 12, 11], 4)

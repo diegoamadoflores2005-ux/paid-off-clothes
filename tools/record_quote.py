@@ -307,6 +307,39 @@ def provenance_for(chosen, args, rates, orders):
     }
 
 
+def cmd_check(dest, rates, orders):
+    """Is this destination the right one to quote, and for which group? Run BEFORE quoting.
+
+    A three-digit prefix is not a place. Birmingham AL is 352 and Tuscaloosa AL is 354; they are an
+    hour apart and in different zone groups. Substituting a city you recognise for a prefix off a
+    list is how a whole column gets quoted to the wrong zone — which is exactly what happened, and
+    the quoting had already been done before anything noticed.
+    """
+    digits = "".join(c for c in str(dest) if c.isdigit())
+    zone = orders.zone_for_zip(dest, rates)
+    print(f"  {dest}  ->  prefix {digits[:3] or '???'}")
+    if zone is None:
+        print("  NOT IN THE ZONE MAP. Its zone is unknown and is never inferred from distance.")
+        print("  Pick a destination whose prefix appears in the chart; run --next for examples.")
+        return 1
+    group = orders.group_for_zone(zone, rates)
+    worst = orders.worst_case_zone(group, rates)
+    print(f"  zone {zone}  ->  group {group!r}  (that group spans "
+          f"{', '.join(str(z) for z in rates['zone_groups'][group]['zones'])})")
+    if zone == worst:
+        print(f"  OK — zone {zone} is {group!r}'s dearest zone, so a quote here covers the group.")
+        missing = [b for b, row in (rates.get("rate_table", {}).get("core") or {}).items()
+                   if (row or {}).get(group) is None]
+        print(f"  {group!r} still needs: {', '.join(missing) if missing else 'nothing'}")
+        return 0
+    print(f"  WRONG DESTINATION for filling cells. {group!r} reaches zone {worst}, and one price "
+          f"covers the whole group,")
+    print(f"  so quoting at zone {zone} would ship every zone {worst} order below cost.")
+    examples = sorted(p for p, z in (rates.get("zone_map") or {}).items() if z == worst)[:10]
+    print(f"  Quote to a ZIP starting with one of these instead: {', '.join(examples)}")
+    return 1
+
+
 def cmd_next(rates, orders):
     """The next quote worth collecting, with everything needed to take it."""
     table = rates.get("rate_table") or {}
@@ -332,7 +365,10 @@ def cmd_next(rates, orders):
         examples = sorted(p for p, z in zm.items() if z == worst)[:8]
         print(f"  {g}: {len(by_group[g])} cells missing — bands {', '.join(by_group[g])}")
         print(f"     must be quoted to zone {worst} (the dearest in this group).")
-        print(f"     prefixes in that zone: {', '.join(examples)}")
+        print(f"     use a ZIP whose FIRST THREE DIGITS are one of: {', '.join(examples)}")
+        print(f"     e.g. {examples[0]}01 — do NOT substitute a city you recognise; neighbouring")
+        print(f"     prefixes fall in different groups (Birmingham 352 is far, Tuscaloosa 354 is mid).")
+        print(f"     Check any destination first:  python3 tools/record_quote.py --check <ZIP>")
     print("\nQuote in a box that is UNDER 1.0 cu ft and UNDER 22 in on every side, but as close to")
     print("1.0 cu ft as you can get — that puts Cubic at its dearest so the weight-based line wins,")
     print("without triggering dimensional weight or a nonstandard-length fee.")
@@ -344,6 +380,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--next", action="store_true", help="what to collect next, and how")
+    ap.add_argument("--check", metavar="ZIP",
+                    help="is this destination right for filling cells? run it before quoting")
     ap.add_argument("--dest", help="destination ZIP")
     ap.add_argument("--oz", type=float, help="package weight in ounces")
     ap.add_argument("--box", help="dimensions in inches, e.g. 12x12x11")
@@ -358,6 +396,8 @@ def main():
         rates = json.load(fh)
     orders = load_orders()
 
+    if args.check:
+        return cmd_check(args.check, rates, orders)
     if args.session:
         return cmd_session(args.session, rates, orders, args.record)
     if args.next or not (args.dest and args.oz and args.box and args.line):

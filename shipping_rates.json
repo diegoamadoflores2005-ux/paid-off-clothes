@@ -1857,5 +1857,16 @@
     ],
     "scope": "One prefix, 969, out of 930 mapped. It is also the only zone 9 prefix in the chart.",
     "not_active": "Every territories cell is empty. zone_pricing_ready() is all-or-nothing, so the table stays off until this group is quoted like any other — an incomplete group cannot go live on its own."
+  },
+  "zone_map_external_check": {
+    "checked_on": "2026-09-21",
+    "prefix": "352",
+    "zip_tested": "35203",
+    "chart_says": 7,
+    "pirate_ship_says": 7,
+    "verdict": "AGREE — no correction needed.",
+    "significance": "The first independent check of the imported chart. Until now the zone map rested entirely on the PDF extraction; Pirate Ship computing the same zone from its own data confirms that import against an outside source.",
+    "what_actually_went_wrong": "A recommendation error, not a data error. The worklist printed 354, 355 and 356 as zone 6 prefixes and a city name was substituted for one of them — Birmingham, which is 352 and zone 7. Birmingham and Tuscaloosa are an hour apart and fall either side of the mid/far line.",
+    "prevention": "tools/record_quote.py --check <ZIP> now answers 'is this the right destination' before any quoting happens, and --next prints prefixes with an explicit warning not to substitute a city."
   }
 }
