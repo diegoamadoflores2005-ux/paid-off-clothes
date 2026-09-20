@@ -360,6 +360,8 @@ class TestZonePricing(unittest.TestCase):
         self.assertEqual(
             {b: table[b]["near"] for b in ("sub", "2", "3", "4", "5")},
             {"sub": 5.83, "2": 6.03, "3": 6.33, "4": 6.40, "5": 7.03})
+        self.assertIn("1", table, "the 1 lb band must exist so 16.0 oz does not round into 2 lb")
+        self.assertIsNone(table["1"]["near"], "no 1 lb rate has been quoted; none may be invented")
 
     def test_a_group_quoted_below_its_worst_zone_is_rejected(self):
         """One price per group must cover the group's dearest zone.
@@ -769,6 +771,33 @@ class TestQuoteValidator(unittest.TestCase):
         problems, _n, _c, _k = self._check(
             self._rates(), box="24x24x24", line=["USPS/Ground Advantage/30.00"])
         self.assertTrue(any("oversize volume" in p for p in problems))
+
+    def test_a_price_matching_another_band_is_flagged_as_a_stale_weight(self):
+        """The exact shape the 12x12x11 control test made.
+
+        Entered as 2 lb, it returned $7.03 — precisely the verified 5 lb rate — and the weight
+        field was not visible in the screenshot. Two bands do not share a price by chance on a
+        rising ladder, so the validator names the likely cause rather than leaving it to be
+        noticed days later.
+        """
+        rates = self._rates()
+        rates["rate_table"]["core"]["5"] = {"near": 7.03, "mid": None, "far": None}
+        problems, _n, _c, _k = self._check(rates, oz=32, line=["USPS/Ground Advantage/7.03"])
+        self.assertTrue(any("stale" in p for p in problems),
+                        f"expected a stale-weight warning naming band 5, got {problems}")
+        self.assertTrue(any("band 5" in p for p in problems))
+
+    def test_the_control_test_figure_is_refused_on_its_own_terms(self):
+        """$7.03 at 2 lb is impossible even with the 2 lb cell removed.
+
+        3 lb is $6.33 and verified. A 2 lb parcel must cost less than a 3 lb one on one service.
+        This is what makes the reading safe: it never depended on trusting the $6.03 cell.
+        """
+        rates = self._rates()
+        rates["rate_table"]["core"]["2"] = {"near": None, "mid": None, "far": None}
+        problems, _n, _c, _k = self._check(rates, oz=32, line=["USPS/Ground Advantage/7.03"])
+        self.assertTrue(any("break the ladder" in p for p in problems),
+                        f"expected a monotonicity refusal with no 2 lb cell present, got {problems}")
 
     def test_a_quote_disagreeing_with_a_filled_cell_is_refused(self):
         problems, _n, _c, _k = self._check(

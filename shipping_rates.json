@@ -178,6 +178,11 @@
         "mid": null,
         "far": null
       },
+      "1": {
+        "near": null,
+        "mid": null,
+        "far": null
+      },
       "2": {
         "near": 6.03,
         "mid": null,
@@ -1756,19 +1761,32 @@
     ]
   },
   "control_test_investigation": {
-    "reported": "a $7.03 discrepancy on the 12x12x11 control test",
-    "caveat": "The conditions were not stated — weight, destination and which service line the figure came from are all unknown here. What follows is what could be established without them, not a conclusion about what happened.",
-    "ruled_out_by_arithmetic": [
-      "A surcharge. 12x12x11 is 1584 cu in and 12 in on its longest side, so it triggers none of the three fees that inflate a Ground Advantage quote: nonstandard length needs a side over 22 in ($4.50), oversize volume needs over 2 cu ft ($21.00), and dimensional weight needs over 1728 cu in AND a zone 5-9 destination. 90210 is zone 4 in any case.",
-      "The size of the gap. $7.03 - $6.03 is exactly $1.00, and no USPS fee is $1.00. The two that could ever apply to a parcel this size are $4.50 and $21.00."
+    "reported": {
+      "origin": "85641",
+      "dest": "90210",
+      "entered_weight_lb": 2,
+      "box_in": [
+        12,
+        12,
+        11
+      ],
+      "service_shown": "USPS Ground Advantage (not Cubic)",
+      "price_usd": 7.03,
+      "caveat": "The weight field was not visible in the results screenshot, so the entered weight is reported rather than independently verified."
+    },
+    "validator_verdict": "REFUSED — three independent failures, nothing written.",
+    "conclusion": "$7.03 is not the 2 lb weight-based rate. The leading explanation by a wide margin is that the quote was taken at 5 lb, from a stale or mistyped weight field.",
+    "arguments": [
+      "IMPOSSIBLE ON ITS OWN TERMS, independent of the $6.03 cell. The 3 lb rate is $6.33, verified by elimination and not in question. A 2 lb parcel must cost less than a 3 lb one on the same service, and $7.03 does not. This would hold even if $6.03 were discarded entirely — it is not a disagreement between two numbers.",
+      "$7.03 IS EXACTLY THE VERIFIED 5 LB NEAR RATE, to the cent, and that rate was collected in a different box. For a box-size effect to produce it, an unrelated mechanism would have to land precisely on a value already in the table. A stale weight field explains it with no coincidence at all, and the weight field was the one thing not visible.",
+      "THE BOX CANNOT DO IT. 1584 cu in, 0.92 cu ft, 12 in longest side: no nonstandard-length fee, no oversize-volume fee, no dimensional weight. And had dim weight somehow applied, the billed weight would be 1584/139 = 11.4 -> 12 lb, far above a 5 lb price."
     ],
-    "what_remains": [
-      "$7.03 is, exactly, the 5 lb near rate already in the table. A 5 lb quote rather than a 2 lb one would produce it precisely.",
-      "Or the figure came from the Cubic line rather than the weight-based one. At 0.92 cu ft this box sits in the 1.0 cu ft Cubic tier, the dearest there is, so its Cubic price is higher than any collected so far.",
-      "Or box size genuinely moves weight-based pricing — which would contradict USPS's own rules and would invalidate all five near cells. This is the possibility worth excluding first, and it is also the least likely."
+    "the_useful_part": [
+      "Under the leading explanation the control test actually SUCCEEDED, just at a different weight than intended. $7.03 in a 12x12x11 box equals $7.03 in a 12x19x3 box, which is exactly what the test set out to prove: box size does not move weight-based pricing.",
+      "That is contingent on the weight really having been 5 lb, so it is recorded as the leading reading rather than as a verified finding. It is not relied on anywhere."
     ],
-    "why_it_could_not_be_settled_here": "A single number with no record of the weight, the destination or the service line cannot be checked against anything. That is the actual defect, and it is not a defect in the quote — it is a defect in how quotes were being collected. tools/record_quote.py now refuses a quote that is missing any of that, and validates the rest before writing.",
-    "resolution_path": "Re-run the control through the tool. It prints the zone, the band, the box's Cubic tier and every surcharge check, then either agrees with core.2.near or refuses and names the rule broken. No round trip needed."
+    "nothing_overwritten": "All five verified near cells are untouched.",
+    "prevention": "tools/record_quote.py now flags a quote landing exactly on another band's recorded price and names a stale weight field as the likely cause. Running the control through it reports all three failures immediately."
   },
   "quoting_methodology": {
     "tool": "python3 tools/record_quote.py",
@@ -1791,5 +1809,6 @@
       "cubic_max_side_in": 22,
       "source": "https://support.pirateship.com/en/articles/6020265-usps-nonstandard-fees"
     }
-  }
+  },
+  "one_lb_band_added": "The zone table had no 1 lb row while the flat ladder in script.js does, so a parcel of exactly 16.0 oz rounded up into the 2 lb cell. Never an undercharge — the true 1 lb rate sits between $5.83 and $6.03 — but an overcharge of up to 20c on a common size. The row is added empty so it is collected rather than silently skipped. No price invented."
 }

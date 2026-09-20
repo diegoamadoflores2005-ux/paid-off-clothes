@@ -159,6 +159,24 @@ def check(args, rates, orders):
                             f"${chosen['price_usd']:.2f}. One of them is wrong; recording would "
                             f"bury the question. Re-quote both weights in one sitting.")
 
+    # A quote that lands exactly on another band's price, to the cent, is far more likely to be
+    # that band than a coincidence. This is the shape the 12x12x11 control test made: entered as
+    # 2 lb, it returned $7.03, which is precisely the verified 5 lb rate. The weight field was not
+    # visible in the screenshot. Carriers do not price two bands identically by accident on a
+    # rising ladder, so the cheap explanation is a stale or mistyped weight.
+    twins = []
+    for other_band, row in (table.get(section) or {}).items():
+        if other_band == band:
+            continue
+        if (row or {}).get(group) is not None and abs(row[group] - chosen["price_usd"]) < 0.005:
+            twins.append(other_band)
+    if twins:
+        problems.append(
+            f"${chosen['price_usd']:.2f} is exactly the price already recorded for band "
+            f"{', '.join(twins)} in this group. On a rising ladder two bands do not share a price "
+            f"by chance — check the weight field actually said {args.oz:g} oz, since a stale one "
+            f"from a previous quote produces precisely this.")
+
     # Monotonicity, checked against the real neighbours rather than after the fact.
     probe = json.loads(json.dumps(rates))
     probe["rate_table"][section][band][group] = chosen["price_usd"]

