@@ -313,9 +313,10 @@ def cmd_next(rates, orders):
     carrier, basis = rates.get("carrier"), rates.get("rate_basis")
     print(f"Table: {carrier} {'/'.join(orders.allowed_services(rates))}  ({basis} basis)")
     print(f"Origin: {rates.get('origin_zip')}\n")
+    groups = orders.group_names(rates)
     todo = [(("core", b, g))
             for b in (table.get("core") or {})
-            for g in ("near", "mid", "far")
+            for g in groups
             if (table["core"][b] or {}).get(g) is None]
     if not todo:
         print("Every core cell is filled.")
@@ -324,7 +325,7 @@ def cmd_next(rates, orders):
     for _s, b, g in todo:
         by_group.setdefault(g, []).append(b)
     zm = rates.get("zone_map") or {}
-    for g in ("near", "mid", "far"):
+    for g in groups:
         if g not in by_group:
             continue
         worst = orders.worst_case_zone(g, rates)

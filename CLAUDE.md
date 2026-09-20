@@ -434,10 +434,24 @@ account's — it lists 5–8 oz zone 4 at $7.46 where the real quote was $5.83. 
 reading: it independently confirms sub-1-lb is flat across 1–4/5–8/9–12/13–15.99 oz, gives the
 dimensional divisor as 139, and shows zone 8 and zone 9 at identical prices in both visible rows.
 
-**A banded group must be quoted at its dearest zone** — near 4, mid 6, far **9**. One price covers
-the whole group, so quoting lower ships every order beyond it below cost, silently. `worst_case_zone()`
-derives this from `zone_map`, and `unverified_cells()` rejects a cell quoted below it. Note that far
-reaches zone 9 because prefix 969 (the Pacific territories) sits in that band.
+**A banded group must be quoted at its dearest zone** — near 4, mid 6, far 8, territories 9. One
+price covers the whole group, so quoting lower ships every order beyond it below cost, silently.
+`worst_case_zone()` derives this from `zone_map`, and `unverified_cells()` rejects a cell quoted
+below it.
+
+**Zone 9 is its own group, `territories`.** Prefix 969 — Guam, Palau, the FSM and the Marshall
+Islands, and the only zone 9 prefix in the chart — used to sit inside `far` alongside zones 7 and 8.
+One price per group meant a choice between charging the whole east coast a Pacific-territory rate
+and shipping every 969 order below cost. Splitting it lets zones 7–8 be quoted at zone 8, their real
+worst case, while 969 carries its own verified rate. `territories` is USPS's own label: the
+published chart heads that column "Territories" where the others read mileage bands.
+
+**The group list is DERIVED from `zone_groups`, never hardcoded.** `group_names()` in `db/orders.py`
+returns them ordered by lowest zone, so the "postage never falls as the destination gets further"
+check walks outward correctly. Four files used to carry `("near", "mid", "far")` as a literal —
+exactly the shape of the category-weight bug, where adding a group leaves copies quietly pricing
+three while the data describes four, and a missing key reads identically to "no rate yet". A test
+greps those files and fails on the literal.
 
 **`shipping_rates.json` is in `PRIVATE_FILES`.** The browser never reads it — the cart prices off the
 flat ladder and the checkout figure comes from `/api/shipping/quote` — so serving it is pure downside.

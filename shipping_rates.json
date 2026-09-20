@@ -163,10 +163,15 @@
     "far": {
       "zones": [
         7,
-        8,
+        8
+      ],
+      "note": "roughly the east coast, upper midwest and the far continental US"
+    },
+    "territories": {
+      "zones": [
         9
       ],
-      "note": "roughly the east coast, upper midwest, and AK/HI/territories"
+      "note": "Guam, Palau, the Federated States of Micronesia and the Marshall Islands (prefix 969)"
     }
   },
   "_zone_group_warning": "Those geographies are a STARTING POINT for choosing a destination to quote, not a zone chart. Pirate Ship prints the actual zone on every quote — read it there and record it, rather than trusting the description.",
@@ -176,75 +181,89 @@
       "sub": {
         "near": 5.83,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "1": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "2": {
         "near": 6.03,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "3": {
         "near": 6.33,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "4": {
         "near": 6.4,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "5": {
         "near": 7.03,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "6": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "7": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "8": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "9": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       }
     },
     "heavy": {
       "11": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "13": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       },
       "16": {
         "near": null,
         "mid": null,
-        "far": null
+        "far": null,
+        "territories": null
       }
     },
     "over_max": {
       "near": null,
       "mid": null,
-      "far": null
+      "far": null,
+      "territories": null
     }
   },
   "zone_map": {
@@ -1827,5 +1846,16 @@
       "It closes the $7.03 anomaly by elimination. With box-size effects ruled out, the only remaining explanation for a 2 lb quote returning exactly the 5 lb rate is the weight field, which is what the stale-weight detector in record_quote.py now flags."
     ],
     "method_note": "The 12x12x11 box is the one to keep using for weight-based quotes: at 0.92 cu ft it forces Cubic into its dearest tier so the weight-based line wins and is visible, while staying under every surcharge threshold."
+  },
+  "zone_group_split": {
+    "decided_on": "2026-09-21",
+    "decision": "Prefix 969 moves out of `far` into its own group, `territories`.",
+    "why": [
+      "A banded group charges one price, so it must be quoted at its dearest zone. With zone 9 inside `far`, the whole east coast — 496 of the 497 far prefixes — would have been charged a Pacific-territory rate, or zone 9 orders would have shipped below cost.",
+      "Splitting it lets zones 7-8 be quoted at zone 8, their real worst case, while zone 9 carries its own verified rate.",
+      "`territories` is USPS's own label for zone 9: the published rate chart heads that column 'Territories' where the others read mileage bands."
+    ],
+    "scope": "One prefix, 969, out of 930 mapped. It is also the only zone 9 prefix in the chart.",
+    "not_active": "Every territories cell is empty. zone_pricing_ready() is all-or-nothing, so the table stays off until this group is quoted like any other — an incomplete group cannot go live on its own."
   }
 }

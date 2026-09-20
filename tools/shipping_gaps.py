@@ -16,7 +16,8 @@ import types
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RATES = os.path.join(APP_DIR, "shipping_rates.json")
-GROUPS = ("near", "mid", "far")
+# Derived from zone_groups via db/orders.py, never hardcoded — see group_names() there for why.
+GROUPS = None   # filled in main() once the file is loaded
 
 # Why each band is on the worklist. Written from the catalogue, not guessed — see the notes in
 # STRIPE.md for how these were derived.
@@ -80,8 +81,10 @@ def cells(rates):
 
 def main():
     args = sys.argv[1:]
+    global GROUPS
     rates = load()
     orders = load_orders()
+    GROUPS = orders.group_names(rates)
     origin = rates.get("origin_zip")
     policy = rates.get("zone_policy")
     all_cells = cells(rates)
@@ -97,7 +100,8 @@ def main():
     print(f"zone policy : {policy}")
     for g in GROUPS:
         zs = rates.get("zone_groups", {}).get(g, {})
-        print(f"  {g:<5} zones {', '.join(map(str, zs.get('zones', []))):<10} {zs.get('note','')}")
+        gw = max(len(x) for x in GROUPS)
+        print(f"  {g:<{gw}} zones {', '.join(map(str, zs.get('zones', []))):<8} {zs.get('note','')}")
     print()
 
     ref = [q for q in rates.get("quotes", [])
@@ -196,18 +200,19 @@ def main():
 
     # the grid
     table = rates.get("rate_table", {})
-    print("  " + "band".ljust(13) + "oz".rjust(7) + "".join(g.rjust(9) for g in GROUPS))
+    w = max(9, max(len(g) for g in GROUPS) + 2)
+    print("  " + "band".ljust(13) + "oz".rjust(7) + "".join(g.rjust(w) for g in GROUPS))
     for section in ("core", "heavy"):
         for band, row in table.get(section, {}).items():
             line = "  " + band_label(band).ljust(13) + band_oz(band).rjust(7)
             for g in GROUPS:
                 v = row.get(g)
-                line += (f"{v:.2f}".rjust(9) if v is not None else "—".rjust(9))
+                line += (f"{v:.2f}".rjust(w) if v is not None else "—".rjust(w))
             print(line + ("" if section == "core" else "   (heavy)"))
     line = "  " + "over top".ljust(13) + "—".rjust(7)
     for g in GROUPS:
         v = table.get("over_max", {}).get(g)
-        line += (f"{v:.2f}".rjust(9) if v is not None else "—".rjust(9))
+        line += (f"{v:.2f}".rjust(w) if v is not None else "—".rjust(w))
     print(line + "   (fallback)")
     print("\n  — = no quote. Nothing is inferred from a neighbouring cell.")
 

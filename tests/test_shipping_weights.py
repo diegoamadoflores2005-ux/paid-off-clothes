@@ -381,16 +381,56 @@ class TestZonePricing(unittest.TestCase):
         self.assertTrue(any(cell == "core.3.near" for cell, _w in orders.unverified_cells(rates)))
         self.assertFalse(orders.zone_pricing_ready())
 
-    def test_the_real_far_group_reaches_zone_nine(self):
-        """Recorded so it cannot be forgotten: 'far' is not just the east coast.
+    def test_zone_nine_has_its_own_group(self):
+        """Prefix 969 used to sit inside `far`, alongside zones 7 and 8.
 
-        The imported chart puts one prefix — 969, the Pacific territories — in zone 9, inside the
-        same band as zones 7 and 8. A far column quoted to New York covers zones 7 and 8 and
-        undercharges every 969 order. The fix is a business decision (ship there or don't), not a
-        code change, so the test exists to keep the question visible rather than to force an answer.
+        One price per group means that group must be quoted at its dearest zone, so zone 9 inside
+        `far` forced a choice between charging the entire east coast a Pacific-territory rate and
+        shipping every 969 order below cost. Splitting it lets each carry its own verified rate.
         """
         orders = load_orders()
-        self.assertEqual(orders.worst_case_zone("far"), 9)
+        rates = orders.load_rates()
+        self.assertEqual(rates["zone_groups"]["far"]["zones"], [7, 8])
+        self.assertEqual(rates["zone_groups"]["territories"]["zones"], [9])
+        self.assertEqual(orders.worst_case_zone("far"), 8,
+                         "far must now be quotable at zone 8, its real worst case")
+        self.assertEqual(orders.worst_case_zone("territories"), 9)
+
+    def test_prefix_969_routes_to_territories(self):
+        orders = load_orders()
+        self.assertEqual(orders.zone_for_zip("96910"), 9, "Guam")
+        self.assertEqual(orders.group_for_zone(9), "territories")
+        self.assertEqual(orders.group_for_zone(8), "far")
+
+    def test_the_new_group_is_required_before_anything_switches_on(self):
+        """An incomplete group may not go live on its own — the gate stays all-or-nothing."""
+        orders = load_orders()
+        required = {g for (_sec, _band, g), _p in orders.required_cells()}
+        self.assertIn("territories", required,
+                      "territories cells must be required, or the table could switch on without them")
+        table = orders.load_rates()["rate_table"]["core"]
+        self.assertTrue(all(row.get("territories") is None for row in table.values()),
+                        "no territories rate has been quoted; none may be invented")
+        self.assertFalse(orders.zone_pricing_ready())
+
+    def test_groups_are_ordered_nearest_first(self):
+        """rate_table_problems() walks them outward to check postage never falls with distance."""
+        orders = load_orders()
+        self.assertEqual(orders.group_names(), ("near", "mid", "far", "territories"))
+
+    def test_the_group_list_is_never_hardcoded(self):
+        """Four files used to carry the three group names as a literal tuple.
+
+        That is the same shape as the category-weight bug: adding a group leaves copies quietly
+        pricing three while the data describes four, and a missing key reads exactly like "no rate
+        yet". Everything now derives from zone_groups.
+        """
+        literal = '"near", "mid", "far"'
+        for rel in ("db/orders.py", "tools/shipping_gaps.py", "tools/record_quote.py"):
+            with self.subTest(file=rel):
+                src = open(os.path.join(APP_DIR, rel), encoding="utf-8").read()
+                self.assertNotIn(literal, src,
+                                 f"{rel} hardcodes the group list; derive it from zone_groups")
 
     def test_a_storage_container_is_never_the_shipping_package(self):
         """The inventory box is recorded for reference and must stay out of the rate path.

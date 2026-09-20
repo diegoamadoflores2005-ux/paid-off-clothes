@@ -633,15 +633,25 @@ def required_cells(rates=None):
     rates = load_rates() if rates is None else rates
     table = rates.get("rate_table") or {}
     cells = []
+    groups = group_names(rates)
     for band, row in (table.get("core") or {}).items():
-        for g in ("near", "mid", "far"):
+        for g in groups:
             cells.append((("core", band, g), (row or {}).get(g)))
-    for g in ("near", "mid", "far"):
+    for g in groups:
         cells.append((("over_max", "over", g), (table.get("over_max") or {}).get(g)))
     return cells
 
 
-GROUPS_FAR_TO_NEAR = ("near", "mid", "far")
+# The group list is DERIVED from zone_groups, never hardcoded. Hardcoding a set of names in four
+# files is the same shape as the category-weight bug: adding `territories` would have left three
+# copies quietly pricing three groups while the data described four, and a missing key reads
+# exactly like "no rate yet". Ordering by lowest zone puts them nearest-first, so the "postage
+# never falls as the destination gets further" check walks them in the right direction.
+def group_names(rates=None):
+    """Every zone group, nearest first. Ordered by lowest zone so comparisons run outward."""
+    rates = load_rates() if rates is None else rates
+    groups = rates.get("zone_groups") or {}
+    return tuple(sorted(groups, key=lambda g: min((groups[g] or {}).get("zones") or [99])))
 
 
 def rate_table_problems(rates=None):
@@ -664,7 +674,8 @@ def rate_table_problems(rates=None):
     problems = []
 
     bands = table_bands(table)
-    for group in GROUPS_FAR_TO_NEAR:
+    groups = group_names(rates)
+    for group in groups:
         seen = []  # (pounds, key, price) for bands this group actually prices
         for lb, section, key in bands:
             cell = ((table.get(section) or {}).get(key) or {}).get(group)
@@ -683,7 +694,7 @@ def rate_table_problems(rates=None):
 
     for lb, section, key in bands:
         row = (table.get(section) or {}).get(key) or {}
-        priced = [(g, float(row[g])) for g in GROUPS_FAR_TO_NEAR if row.get(g) is not None]
+        priced = [(g, float(row[g])) for g in groups if row.get(g) is not None]
         for (g_a, price_a), (g_b, price_b) in zip(priced, priced[1:]):
             if price_b < price_a:
                 problems.append(
