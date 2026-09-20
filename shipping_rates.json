@@ -112,6 +112,34 @@
         "First quote on file with dimensions recorded. Use this same box family for the remaining",
         "near-group quotes so the column stays internally comparable."
       ]
+    },
+    {
+      "price_usd": 5.92,
+      "oz": 32,
+      "band": "2",
+      "origin_zip": "85641",
+      "dest_zip": "90210",
+      "zone": 4,
+      "zone_verified": true,
+      "group": "near",
+      "dims_in": [
+        12,
+        19,
+        3
+      ],
+      "carrier": "UPS",
+      "service": "Ground Saver",
+      "collected": "2026-09-20",
+      "source": "Pirate Ship, alongside the USPS 2 lb quote",
+      "use": "reference only",
+      "notes": [
+        "Undercuts USPS Ground Advantage at 2 lb by 11c ($5.92 vs $6.03), the same way UPS Ground",
+        "Saver undercut it by 1c at 8 oz. Two data points, not a trend, but worth watching.",
+        "NOT eligible for the table. This file is one carrier by design, and mixing carriers is",
+        "what produced its very first conflict — a UPS $5.82 filed as a USPS rate. If UPS turns",
+        "out to be consistently cheaper that is a business decision to switch the table's carrier",
+        "wholesale, not a licence to fill cells from whichever line happens to be lowest."
+      ]
     }
   ],
   "origin_note": "Vail, AZ. The ONLY place an origin belongs: shipping_cents() in db/orders.py and shippingFor() in script.js take weight and nothing else, so writing 85641 into either would be decoration, not configuration. When the zone engine is built it reads the origin from here.",
@@ -151,7 +179,7 @@
         "far": null
       },
       "2": {
-        "near": null,
+        "near": 6.03,
         "mid": null,
         "far": null
       },
@@ -1223,7 +1251,7 @@
         "$9.15 at 32 oz (2026-09-16, 12x9x3)",
         "$5.93 at 48 oz (2026-09-18, 12x19x3) — a heavier parcel, priced lower"
       ],
-      "status": "OPEN — diagnosed, awaiting one re-quote",
+      "status": "RESOLVED — $9.15 was never a Ground Advantage 2 lb rate; the real one is $6.03",
       "why_it_matters": [
         "A 3 lb parcel came back CHEAPER than this 2 lb one on the same lane. On a single",
         "service that is arithmetically impossible, so the two are not the same service.",
@@ -1245,6 +1273,13 @@
         "line is cheaper, so neither number can be assumed weight-based just because a weight",
         "was typed in to get it.",
         "The cell stays unverified and zone pricing stays off."
+      ],
+      "resolution": [
+        "The cell was quoted directly at 2 lb with the service line read back: $6.03.",
+        "$9.15 had already been disproven by the 3 lb rate of $6.33 — a 2 lb parcel cannot",
+        "cost more than a 3 lb one — and it is out of the table, in rejected_quotes.",
+        "$6.03 also completed the near ladder's proof: it ruled $6.33 out of every band below",
+        "3 lb, which pinned the last unverified cell in the column."
       ]
     }
   ],
@@ -1434,7 +1469,7 @@
       "evidence": "Two weights (8 oz, 12.8 oz) quoted in one sitting both returned $5.83, and the owner read the service line back as plain Ground Advantage."
     },
     "core.3.near": {
-      "verified": false,
+      "verified": true,
       "service": "Ground Advantage",
       "rate_basis": "weight",
       "price_usd": 6.33,
@@ -1445,7 +1480,8 @@
         19,
         3
       ],
-      "why_unverified": "Bounded, not pinned. $6.33 < $6.40 (the confirmed 4 lb rate) proves only that it is the rate for 3 lb OR LESS. It rests on the owner's statement that 3 lb was typed, which is consistent with everything else but is not demonstrated — the figure would look identical if it were really the 2 lb rate. One 2 lb quote settles it and fills the empty 2 lb cell at the same time: a 2 lb price below $6.33 confirms this cell, and a 2 lb price equal to it moves it."
+      "verified_on": "2026-09-20",
+      "evidence": "Pinned by elimination once 2 lb came in at $6.03. $6.33 was bounded at '3 lb or less'; it is not 2 lb ($6.03), not 1 lb (whose rate cannot exceed the 2 lb one), and not sub-1-lb ($5.83). Only 3 lb is left."
     },
     "core.4.near": {
       "verified": true,
@@ -1476,6 +1512,21 @@
       ],
       "verified_on": "2026-09-20",
       "evidence": "Squeezed from both sides. $7.03 > $6.40, the confirmed 4 lb rate, so it is at least 5 lb. And $7.03 < $8.56, the Cubic price for this box — Cubic WON at 6 lb, which means weight-based at 6 lb exceeds $8.56 and therefore exceeds $7.03. So it is at most 5 lb too. Exactly 5."
+    },
+    "core.2.near": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 6.03,
+      "quoted_on": "2026-09-20",
+      "verified_on": "2026-09-20",
+      "dest_zip": "90210",
+      "dims_in": [
+        12,
+        19,
+        3
+      ],
+      "evidence": "Quoted directly at 2 lb on the same lane and box, with the service line read back as Ground Advantage. Replaces the rejected $9.15, which a 3 lb rate of $6.33 had already disproven."
     }
   },
   "quarantined_quotes": [
@@ -1579,5 +1630,18 @@
     "rule": "USPS bills a parcel at its rounded-up pound above 1 lb.",
     "evidence": "3.5 lb on 85641 -> 90210 returned $6.40, the 4 lb rate, not $6.33 (3 lb).",
     "why_it_matters": "The entire band model assumes this. band_for_oz() rounds up, the table is indexed on whole pounds, and an unquoted pound charges the next band up. If billing rounded down or prorated, every one of those would be wrong. This is the first time it has been checked against the carrier rather than assumed from documentation."
+  },
+  "near_column_status": {
+    "complete_through": "5 lb",
+    "ladder": {
+      "sub": 5.83,
+      "2": 6.03,
+      "3": 6.33,
+      "4": 6.4,
+      "5": 7.03
+    },
+    "all_verified": true,
+    "blocked_above": "6-9 lb is Ground Advantage Cubic at $8.56 for this box. Cubic bills on volume, so those four cells cannot be filled until the real mailer is measured — package_problem() enforces that.",
+    "one_lb_gap": "No 1 lb row exists. A parcel of exactly 16.0 oz rounds up to the 2 lb cell and pays $6.03. The true 1 lb rate is somewhere between $5.83 and $6.03, so this is an overcharge of at most 20c and never an undercharge. Worth one quote eventually; not worth blocking on."
   }
 }

@@ -315,6 +315,60 @@ class TestZonePricing(unittest.TestCase):
         self.assertFalse(orders.zone_pricing_ready(),
                          "zone pricing must stay off until every required cell holds a quote")
 
+    # ---- the real file -------------------------------------------------------------------------
+    # These run against shipping_rates.json itself, not a fixture. Every quote collected from here
+    # on lands in that file, and a typo or a misread service line is exactly the kind of thing that
+    # looks fine in a diff. These are the checks that would have caught the ones already found.
+    def test_the_real_table_is_sound(self):
+        """Whatever is in the file must obey the arithmetic of postage, at every stage of filling.
+
+        This is the check that rejects a Cubic price sitting in a weight band, a column filled in
+        the wrong order, and the $9.15 that outpriced a heavier parcel.
+        """
+        orders = load_orders()
+        self.assertEqual(orders.rate_table_problems(), [],
+                         "the real rate table is holding a combination that cannot be right")
+
+    def test_every_verified_cell_says_how_it_was_verified(self):
+        """A cell marked verified with no evidence is a claim, not a record."""
+        orders = load_orders()
+        rates = orders.load_rates()
+        for cell, entry in (rates.get("cell_provenance") or {}).items():
+            if not entry.get("verified"):
+                continue
+            with self.subTest(cell=cell):
+                self.assertTrue(entry.get("evidence"), f"{cell} is verified but says nothing about "
+                                                       f"how — that is unfalsifiable")
+                self.assertIn("service", entry, f"{cell} does not name the service it was quoted on")
+                self.assertIn("rate_basis", entry, f"{cell} does not name its rate basis")
+
+    def test_no_cell_holds_a_price_from_another_carrier(self):
+        """The very first conflict in this file was a UPS price filed as a USPS rate."""
+        orders = load_orders()
+        rates = orders.load_rates()
+        allowed = orders.allowed_services(rates)
+        for cell, entry in (rates.get("cell_provenance") or {}).items():
+            with self.subTest(cell=cell):
+                self.assertIn(entry.get("service"), allowed,
+                              f"{cell} is filled from a service this table cannot hold")
+
+    def test_the_verified_near_ladder_matches_what_was_quoted(self):
+        """The five confirmed near cells, as collected. A silent edit to any of them fails here."""
+        orders = load_orders()
+        table = orders.load_rates()["rate_table"]["core"]
+        self.assertEqual(
+            {b: table[b]["near"] for b in ("sub", "2", "3", "4", "5")},
+            {"sub": 5.83, "2": 6.03, "3": 6.33, "4": 6.40, "5": 7.03})
+
+    def test_the_cubic_bands_are_still_empty(self):
+        """6-9 lb quoted $8.56 on Cubic, which bills on volume. Until the mailer is measured those
+        cells must stay empty — a volume price for an unmeasured box is not a price."""
+        orders = load_orders()
+        table = orders.load_rates()["rate_table"]["core"]
+        for band in ("6", "7", "8", "9"):
+            self.assertIsNone(table[band]["near"],
+                              f"{band} lb was filled from a Cubic quote without a measured box")
+
     def test_an_empty_zone_map_keeps_zone_pricing_off(self):
         rates = self._full_table()
         rates["zone_map"] = {}
