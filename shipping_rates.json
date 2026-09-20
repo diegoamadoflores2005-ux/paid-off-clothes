@@ -1786,7 +1786,9 @@
       "That is contingent on the weight really having been 5 lb, so it is recorded as the leading reading rather than as a verified finding. It is not relied on anywhere."
     ],
     "nothing_overwritten": "All five verified near cells are untouched.",
-    "prevention": "tools/record_quote.py now flags a quote landing exactly on another band's recorded price and names a stale weight field as the likely cause. Running the control through it reports all three failures immediately."
+    "prevention": "tools/record_quote.py now flags a quote landing exactly on another band's recorded price and names a stale weight field as the likely cause. Running the control through it reports all three failures immediately.",
+    "resolved_on": "2026-09-21",
+    "resolution": "CONFIRMED as a weight-field error. Re-run with the weight verified at 2 lb, the same box and the same lane returned $6.03, matching the recorded cell exactly. The earlier $7.03 was the 5 lb rate, as the twin-price argument predicted. No verified cell was ever overwritten, and the box-size hypothesis is dead: see box_independence_verified."
   },
   "quoting_methodology": {
     "tool": "python3 tools/record_quote.py",
@@ -1810,5 +1812,20 @@
       "source": "https://support.pirateship.com/en/articles/6020265-usps-nonstandard-fees"
     }
   },
-  "one_lb_band_added": "The zone table had no 1 lb row while the flat ladder in script.js does, so a parcel of exactly 16.0 oz rounded up into the 2 lb cell. Never an undercharge — the true 1 lb rate sits between $5.83 and $6.03 — but an overcharge of up to 20c on a common size. The row is added empty so it is collected rather than silently skipped. No price invented."
+  "one_lb_band_added": "The zone table had no 1 lb row while the flat ladder in script.js does, so a parcel of exactly 16.0 oz rounded up into the 2 lb cell. Never an undercharge — the true 1 lb rate sits between $5.83 and $6.03 — but an overcharge of up to 20c on a common size. The row is added empty so it is collected rather than silently skipped. No price invented.",
+  "box_independence_verified": {
+    "confirmed_on": "2026-09-21",
+    "claim": "Box dimensions do not affect WEIGHT-BASED Ground Advantage pricing.",
+    "evidence": [
+      "2 lb to 90210 in a 12x12x11 box (1584 cu in, 0.92 cu ft) returned $6.03.",
+      "2 lb to 90210 in a 12x19x3 box (684 cu in, 0.40 cu ft) returned $6.03.",
+      "Same weight, same lane, two boxes differing by a factor of 2.3 in volume and sitting in different Cubic tiers (1.0 vs 0.4). Identical price."
+    ],
+    "why_it_matters": [
+      "It validates all five near cells, which were collected in the 12x19x3 box. Had the box mattered, every one of them would have been a rate for a parcel the shop does not ship.",
+      "It means the weight-based columns can be collected in ANY convenient box, so mid and far need no packaging decision at all. Only the Cubic bands depend on the box.",
+      "It closes the $7.03 anomaly by elimination. With box-size effects ruled out, the only remaining explanation for a 2 lb quote returning exactly the 5 lb rate is the weight field, which is what the stale-weight detector in record_quote.py now flags."
+    ],
+    "method_note": "The 12x12x11 box is the one to keep using for weight-based quotes: at 0.92 cu ft it forces Cubic into its dearest tier so the weight-based line wins and is visible, while staying under every surcharge threshold."
+  }
 }

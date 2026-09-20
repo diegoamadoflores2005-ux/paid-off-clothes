@@ -187,6 +187,126 @@ def check(args, rates, orders):
     return problems, notes, chosen, cell
 
 
+# ---------- a whole quoting session at once -------------------------------------------------------
+# Collecting 37 cells one command at a time is 37 chances to mistype a flag. A session file matches
+# how the work is actually done: pick a destination, pick a box, then walk the weights. Every row is
+# validated and NOTHING is written unless every row passes — the same all-or-nothing rule
+# apply_shipping_rates.py uses, for the same reason. A half-applied column is worse than none,
+# because the gaps are invisible once the file looks full.
+SESSION_HELP = """\
+# Lines starting with # are ignored. `dest` and `box` apply to every row below them.
+dest 98101
+box 12x12x11
+
+# weight_oz   then every service line on the screen, as CARRIER/SERVICE/PRICE
+8    USPS/Ground Advantage/7.42, USPS/Ground Advantage Cubic/8.10
+32   USPS/Ground Advantage/8.15, USPS/Ground Advantage Cubic/8.10
+"""
+
+
+def parse_session(text):
+    """-> [{dest, oz, box, line[]}], or raise SystemExit naming the offending line."""
+    rows, dest, box = [], None, None
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        head, _, rest = line.partition(" ")
+        key = head.lower()
+        if key == "dest":
+            dest = rest.strip()
+            continue
+        if key == "box":
+            box = rest.strip()
+            continue
+        if dest is None or box is None:
+            raise SystemExit(f"line {n}: a weight row before `dest` and `box` have both been set")
+        try:
+            oz = float(head)
+        except ValueError:
+            raise SystemExit(f"line {n}: expected `dest`, `box`, or a weight in ounces, got {head!r}")
+        # Comma-separated, because service names contain spaces ("Ground Advantage Cubic").
+        services = [t.strip() for t in rest.split(",") if "/" in t]
+        if not services:
+            raise SystemExit(f"line {n}: no service lines. Give every line on the screen as "
+                             f"CARRIER/SERVICE/PRICE, separated by commas, e.g.\n"
+                             f"  32   USPS/Ground Advantage/6.03, USPS/Ground Advantage Cubic/7.10")
+        rows.append({"dest": dest, "oz": oz, "box": box, "line": services, "lineno": n})
+    return rows
+
+
+def cmd_session(path, rates, orders, write):
+    """Validate every row first, then write all of them or none."""
+    if path == "-":
+        text = sys.stdin.read()
+    else:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    rows = parse_session(text)
+    if not rows:
+        print("No quote rows found. The format is:\n")
+        print(SESSION_HELP)
+        return 2
+
+    staged, failed = [], 0
+    probe = json.loads(json.dumps(rates))   # rows are checked against each other, not just the file
+    for row in rows:
+        args = argparse.Namespace(dest=row["dest"], oz=row["oz"], box=row["box"],
+                                  line=row["line"], record=False, next=False)
+        problems, _notes, chosen, cell = check(args, probe, orders)
+        label = f"line {row['lineno']}: {row['oz']:g} oz -> {row['dest']}"
+        if problems:
+            failed += 1
+            print(f"  FAIL  {label}")
+            for pr in problems:
+                print(f"        ! {pr}")
+            continue
+        print(f"  ok    {label}  {cell} = ${chosen['price_usd']:.2f}")
+        section, band, group = cell.split(".")
+        probe["rate_table"][section][band][group] = chosen["price_usd"]
+        staged.append((cell, chosen, args))
+
+    print()
+    if failed:
+        print(f"REFUSED — {failed} of {len(rows)} rows failed. Nothing written.")
+        print("  A column written with gaps looks complete and is not, so the whole session is")
+        print("  held back until every row passes.")
+        return 1
+    print(f"All {len(staged)} rows pass.")
+    if not write:
+        print("  (dry run; pass --record to write them)")
+        return 0
+
+    for cell, chosen, args in staged:
+        section, band, group = cell.split(".")
+        rates["rate_table"][section][band][group] = chosen["price_usd"]
+        rates.setdefault("cell_provenance", {})[cell] = provenance_for(chosen, args, rates, orders)
+    with open(RATES, "w", encoding="utf-8") as fh:
+        json.dump(rates, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    print(f"  recorded {len(staged)} cells")
+    return 0
+
+
+def provenance_for(chosen, args, rates, orders):
+    return {
+        "verified": True,
+        "service": chosen["service"],
+        "rate_basis": rates.get("rate_basis"),
+        "price_usd": chosen["price_usd"],
+        "dest_zip": args.dest,
+        "oz": args.oz,
+        "dims_in": parse_box(args.box),
+        "all_lines_seen": [parse_line(t) for t in args.line],
+        "evidence": (f"Quoted at {args.oz:g} oz to {args.dest} (zone "
+                     f"{orders.zone_for_zip(args.dest, rates)}) in a "
+                     f"{'x'.join(f'{d:g}' for d in parse_box(args.box))} box, with every service "
+                     f"line on the screen recorded. Validated by tools/record_quote.py against "
+                     f"zone worst-case, package surcharges, service eligibility and ladder "
+                     f"monotonicity before being written."),
+    }
+
+
 def cmd_next(rates, orders):
     """The next quote worth collecting, with everything needed to take it."""
     table = rates.get("rate_table") or {}
@@ -229,12 +349,16 @@ def main():
     ap.add_argument("--line", action="append", default=[],
                     help='one service line: "CARRIER/SERVICE/PRICE". Repeat for every line shown.')
     ap.add_argument("--record", action="store_true", help="write it, if every check passes")
+    ap.add_argument("--session", help="a file (or - for stdin) holding a whole quoting session; "
+                                      "every row is validated and all are written or none")
     args = ap.parse_args()
 
     with open(RATES, encoding="utf-8") as fh:
         rates = json.load(fh)
     orders = load_orders()
 
+    if args.session:
+        return cmd_session(args.session, rates, orders, args.record)
     if args.next or not (args.dest and args.oz and args.box and args.line):
         return cmd_next(rates, orders)
 
@@ -256,22 +380,7 @@ def main():
 
     section, band, group = cell.split(".")
     rates["rate_table"][section][band][group] = chosen["price_usd"]
-    rates.setdefault("cell_provenance", {})[cell] = {
-        "verified": True,
-        "service": chosen["service"],
-        "rate_basis": rates.get("rate_basis"),
-        "price_usd": chosen["price_usd"],
-        "dest_zip": args.dest,
-        "oz": args.oz,
-        "dims_in": parse_box(args.box),
-        "all_lines_seen": [parse_line(t) for t in args.line],
-        "evidence": (f"Quoted at {args.oz} oz to {args.dest} (zone "
-                     f"{orders.zone_for_zip(args.dest, rates)}) in a "
-                     f"{'x'.join(f'{d:g}' for d in parse_box(args.box))} box, with every service "
-                     f"line on the screen recorded. Validated by tools/record_quote.py against "
-                     f"zone worst-case, package surcharges, service eligibility and ladder "
-                     f"monotonicity before being written."),
-    }
+    rates.setdefault("cell_provenance", {})[cell] = provenance_for(chosen, args, rates, orders)
     with open(RATES, "w", encoding="utf-8") as fh:
         json.dump(rates, fh, indent=2, ensure_ascii=False)
         fh.write("\n")

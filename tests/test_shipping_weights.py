@@ -668,6 +668,95 @@ class TestZonePricing(unittest.TestCase):
                         "a plateau that DROPS below the band before it is still a fault")
 
 
+class TestTheSwitchOn(unittest.TestCase):
+    """What happens the day the table is finished — proven before it happens, not after.
+
+    Everything else tests the table while it is OFF. This exercises the transition: with a complete,
+    sound, fully-verified table, shipping_cents() must start pricing by zone, and the cart — which
+    has no address — must keep using the flat ladder. Getting that wrong would mean two identical
+    baskets priced by different rules, which is the failure the all-or-nothing gate exists to stop.
+    """
+
+    def _complete_rates(self):
+        bands = ["sub", "1"] + [str(b) for b in range(2, 10)]
+        rates = {
+            "origin_zip": "85641", "carrier": "USPS", "service": "Ground Advantage",
+            "rate_basis": "weight",
+            "zone_groups": {"near": {"zones": [1, 2, 3, 4]}, "mid": {"zones": [5, 6]},
+                            "far": {"zones": [7, 8, 9]}},
+            "zone_map": {"902": 4, "800": 5, "100": 8},
+            "rate_table": {
+                "core": {b: {"near": 5.0 + i, "mid": 6.0 + i, "far": 7.0 + i}
+                         for i, b in enumerate(bands)},
+                "heavy": {}, "over_max": {"near": 40.0, "mid": 41.0, "far": 42.0},
+            },
+        }
+        orders = load_orders()
+        rates["cell_provenance"] = {
+            f"{sec}.{band}.{grp}": {"verified": True, "service": "Ground Advantage",
+                                    "rate_basis": "weight", "dest_zip": {"near": "90210",
+                                                                        "mid": "80001",
+                                                                        "far": "10001"}[grp]}
+            for (sec, band, grp), price in orders.required_cells(rates) if price is not None}
+        return rates
+
+    def _with(self, rates):
+        import json as _json
+        import tempfile
+        orders = load_orders()
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        _json.dump(rates, fh)
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+        orders._RATES_PATH = fh.name
+        orders._rates_cache["mtime"] = None
+        return orders
+
+    @staticmethod
+    def _basket(orders, category="Shirts", qty=5):
+        """(product, size, qty) triples, the shape shipping_cents() consumes."""
+        return [({"category": category}, "M", qty)]
+
+    def test_a_complete_verified_table_switches_the_pricing_rule(self):
+        orders = self._with(self._complete_rates())
+        self.assertTrue(orders.zone_pricing_ready())
+        lines = self._basket(orders)
+
+        flat = orders.shipping_cents(lines, None)
+        zoned = orders.shipping_cents(lines, "90210")
+        self.assertEqual(orders.shipping_source(None), "estimate")
+        self.assertEqual(orders.shipping_source("90210"), "zone")
+        self.assertNotEqual(flat, zoned, "a ready table must actually change the charged figure")
+
+    def test_the_same_basket_costs_more_the_further_it_goes(self):
+        orders = self._with(self._complete_rates())
+        lines = self._basket(orders)
+        near = orders.shipping_cents(lines, "90210")
+        mid = orders.shipping_cents(lines, "80001")
+        far = orders.shipping_cents(lines, "10001")
+        self.assertLess(near, mid)
+        self.assertLess(mid, far)
+
+    def test_an_unmapped_destination_still_falls_back_to_the_estimate(self):
+        """Even with a complete table. A zone is never borrowed from a neighbouring prefix."""
+        orders = self._with(self._complete_rates())
+        lines = self._basket(orders)
+        self.assertEqual(orders.shipping_cents(lines, "59718"),
+                         orders.shipping_cents(lines, None))
+        self.assertEqual(orders.shipping_source("59718"), "estimate")
+
+    def test_one_unverified_cell_holds_the_whole_switch(self):
+        """The gate is all-or-nothing on provenance too, not just on prices being present."""
+        rates = self._complete_rates()
+        rates["cell_provenance"]["core.3.mid"]["verified"] = False
+        orders = self._with(rates)
+        self.assertFalse(orders.zone_pricing_ready())
+        lines = self._basket(orders)
+        self.assertEqual(orders.shipping_cents(lines, "90210"),
+                         orders.shipping_cents(lines, None),
+                         "one unverified cell must keep every order on the flat ladder")
+
+
 class TestRatesAreNotServed(unittest.TestCase):
     """shipping_rates.json must not be reachable over HTTP.
 
@@ -814,6 +903,49 @@ class TestQuoteValidator(unittest.TestCase):
         problems, _n, _c, _k = self._check(
             self._rates(), dest="59718", line=["USPS/Ground Advantage/7.00"])
         self.assertTrue(any("not in zone_map" in p for p in problems))
+
+    # ---- session mode ---------------------------------------------------------------------------
+    def test_a_session_parses_dest_box_and_weights(self):
+        rows = self.rq.parse_session(
+            "# comment\ndest 98101\nbox 12x12x11\n\n"
+            "8   USPS/Ground Advantage/6.40, USPS/Ground Advantage Cubic/8.90\n"
+            "32  USPS/Ground Advantage/7.10\n")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["dest"], "98101")
+        self.assertEqual(rows[0]["box"], "12x12x11")
+        self.assertEqual(rows[0]["oz"], 8)
+        self.assertEqual(len(rows[0]["line"]), 2, "both service lines must survive the comma split")
+        self.assertEqual(rows[0]["line"][1], "USPS/Ground Advantage Cubic/8.90",
+                         "a service name containing spaces must not be split")
+
+    def test_a_weight_row_before_dest_and_box_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.rq.parse_session("8  USPS/Ground Advantage/6.40\n")
+
+    def test_a_row_with_no_service_line_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.rq.parse_session("dest 98101\nbox 12x12x11\n8  6.40\n")
+
+    def test_rows_in_one_session_are_checked_against_each_other(self):
+        """Not just against the file. Two rows can be individually fine and jointly impossible."""
+        rates = self._rates()
+        rows = self.rq.parse_session(
+            "dest 98001\nbox 12x12x11\n"
+            "32  USPS/Ground Advantage/7.10\n"
+            "48  USPS/Ground Advantage/6.90\n")
+        probe = json.loads(json.dumps(rates))
+        verdicts = []
+        for row in rows:
+            args = argparse.Namespace(dest=row["dest"], oz=row["oz"], box=row["box"],
+                                      line=row["line"], record=False, next=False)
+            problems, _n, chosen, cell = self.rq.check(args, probe, self.orders)
+            verdicts.append(problems)
+            if not problems:
+                sec, band, grp = cell.split(".")
+                probe["rate_table"][sec][band][grp] = chosen["price_usd"]
+        self.assertEqual(verdicts[0], [], "the 2 lb row is fine on its own")
+        self.assertTrue(any("break the ladder" in p for p in verdicts[1]),
+                        "the 3 lb row must fail against the 2 lb row staged before it")
 
     def test_box_facts_match_the_usps_thresholds(self):
         f = self.rq.box_facts([12, 12, 11], 4)

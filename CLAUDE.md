@@ -386,6 +386,28 @@ destination's first three digits. USPS publishes the chart per origin; mileage o
 it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
 neighbouring zone's price.
 
+**Box size does not affect weight-based Ground Advantage pricing** — verified, not assumed: 2 lb
+to 90210 returned $6.03 in a 12x19x3 box (0.40 cu ft) and $6.03 in a 12x12x11 box (0.92 cu ft), two
+different Cubic tiers. So the weight-based columns can be quoted in any convenient box and need no
+packaging decision; only the Cubic bands depend on the package. Keep using **12 × 12 × 11** for
+quoting: at 0.92 cu ft it forces Cubic into its dearest tier so the weight-based line is the one
+shown, while staying under every surcharge threshold.
+
+**Collect a whole column with `--session`, not one command at a time.** The file sets `dest` and
+`box` once, then one row per weight with every service line comma-separated:
+
+```
+dest 98101
+box 12x12x11
+8    USPS/Ground Advantage/6.40, USPS/Ground Advantage Cubic/8.90
+32   USPS/Ground Advantage/7.10, USPS/Ground Advantage Cubic/8.90
+```
+
+Rows are validated **against each other as well as against the file** — two rows can each be fine
+alone and jointly impossible — and **nothing is written unless every row passes**, the same
+all-or-nothing rule `apply_shipping_rates.py` uses. A column written with gaps looks complete and
+is not.
+
 **Never hand-enter a quote — use `python3 tools/record_quote.py`.** Every fault this table has
 had was findable at collection time and was instead found days later: a UPS price filed as USPS, a
 Cubic price filed as weight-based, a 2 lb rate above the 3 lb one, one figure carried across three
