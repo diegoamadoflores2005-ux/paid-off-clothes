@@ -561,10 +561,28 @@ class TestZonePricing(unittest.TestCase):
     def test_no_zip_means_the_flat_ladder(self):
         """Every cart. There is no address at that point, so there is no zone to price by."""
         orders = self._with_rates(self._full_table())
-        self.assertEqual(orders.shipping_source(None), "estimate")
-        self.assertEqual(orders.shipping_source("90210"), "zone")
-        self.assertEqual(orders.shipping_source("59718"), "estimate",
-                         "an unmapped destination is still an estimate")
+        lines = [({"category": "Shirts"}, "M", 5)]
+        self.assertEqual(orders.shipping_quote(lines, None)["source"], "estimate")
+        self.assertEqual(orders.shipping_quote(lines, "90210")["source"], "zone")
+
+    def test_the_source_is_read_off_the_same_call_that_priced_it(self):
+        """There used to be a second function answering "which rule applied".
+
+        It went stale the moment an unpriceable destination stopped falling back to the ladder: the
+        pricer sent the order to a human while the helper still said "estimate", so the panel would
+        have shown an estimate for an order nothing could price. One call now returns the figure,
+        the rule and the reason together, which is the only arrangement those three cannot drift in.
+        """
+        orders = self._with_rates(self._full_table())
+        self.assertFalse(hasattr(orders, "shipping_source"),
+                         "a second implementation of this decision is the bug, not the fix")
+        lines = [({"category": "Shirts"}, "M", 5)]
+        for dest in (None, "90210", "59718"):
+            q = orders.shipping_quote(lines, dest)
+            self.assertEqual(q["cents"] is None, q["source"] == "manual",
+                             f"{dest}: a manual source and a missing price must agree")
+            self.assertEqual(q["reason"] is not None, q["source"] == "manual",
+                             f"{dest}: a manual quote always carries the words to explain it")
 
     # ---- unquoted pounds -----------------------------------------------------------------------
     def test_an_unquoted_pound_pays_the_next_band_up_not_the_fallback(self):
@@ -790,11 +808,12 @@ class TestTheSwitchOn(unittest.TestCase):
         self.assertTrue(orders.zone_pricing_ready())
         lines = self._basket(orders)
 
-        flat = orders.shipping_cents(lines, None)
-        zoned = orders.shipping_cents(lines, "90210")
-        self.assertEqual(orders.shipping_source(None), "estimate")
-        self.assertEqual(orders.shipping_source("90210"), "zone")
-        self.assertNotEqual(flat, zoned, "a ready table must actually change the charged figure")
+        flat = orders.shipping_quote(lines, None)
+        zoned = orders.shipping_quote(lines, "90210")
+        self.assertEqual(flat["source"], "estimate")
+        self.assertEqual(zoned["source"], "zone")
+        self.assertNotEqual(flat["cents"], zoned["cents"],
+                            "a ready table must actually change the charged figure")
 
     def test_the_same_basket_costs_more_the_further_it_goes(self):
         orders = self._with(self._complete_rates())
@@ -805,24 +824,58 @@ class TestTheSwitchOn(unittest.TestCase):
         self.assertLess(near, mid)
         self.assertLess(mid, far)
 
-    def test_an_unmapped_destination_still_falls_back_to_the_estimate(self):
-        """Even with a complete table. A zone is never borrowed from a neighbouring prefix."""
+    def test_an_unmapped_destination_goes_to_a_human_not_to_the_placeholder(self):
+        """A zone is never borrowed from a neighbouring prefix — and never priced off the ladder.
+
+        This used to fall back to SHIPPING_TIERS. Those are national-average placeholders nobody
+        quoted, so falling back meant showing a made-up figure as the charged price at checkout,
+        which is the drift this codebase refuses everywhere else. The fallback is a person now.
+        """
         orders = self._with(self._complete_rates())
         lines = self._basket(orders)
-        self.assertEqual(orders.shipping_cents(lines, "59718"),
-                         orders.shipping_cents(lines, None))
-        self.assertEqual(orders.shipping_source("59718"), "estimate")
+        q = orders.shipping_quote(lines, "59718")
+        self.assertIsNone(q["cents"], "an unknown zone must not be priced off the flat ladder")
+        self.assertEqual(q["source"], "manual")
+        self.assertIsNotNone(q["reason"])
+        self.assertIsNotNone(orders.shipping_quote(lines, None)["cents"],
+                             "the cart, which has no address at all, still shows an estimate")
 
-    def test_one_unverified_cell_holds_the_whole_switch(self):
-        """The gate is all-or-nothing on provenance too, not just on prices being present."""
+    def test_an_unverified_cell_is_skipped_without_holding_up_its_neighbours(self):
+        """Verification is per cell now, and that is a change of fallback, not of standard.
+
+        The old gate refused to price anything until all 36 cells were verified, because the
+        alternative was the placeholder ladder — and pricing two identical baskets by different
+        rules depending on which cell happened to be filled is worse than pricing neither. With a
+        human as the fallback instead, that objection disappears: an order is either charged a rate
+        somebody read off the screen or handed to a person. Neither is a guess, so a half-filled
+        table is safe to launch on and the shop sells while the rest is collected.
+        """
         rates = self._complete_rates()
         rates["cell_provenance"]["core.3.mid"]["verified"] = False
         orders = self._with(rates)
-        self.assertFalse(orders.zone_pricing_ready())
         lines = self._basket(orders)
-        self.assertEqual(orders.shipping_cents(lines, "90210"),
-                         orders.shipping_cents(lines, None),
-                         "one unverified cell must keep every order on the flat ladder")
+
+        # The zone it was unverified in rounds up to the next verified band above it, never down
+        # to a made-up number: 3 lb mid is skipped, so a 3 lb parcel pays the 4 lb mid rate.
+        mid = orders.shipping_quote(lines, "80001")
+        self.assertEqual(mid["source"], "zone")
+        self.assertEqual(mid["cents"], round(rates["rate_table"]["core"]["4"]["mid"] * 100),
+                         "an unverified cell falls UP a band, never onto the flat ladder")
+
+        # And a different group is untouched by it.
+        near = orders.shipping_quote(lines, "90210")
+        self.assertEqual(near["source"], "zone")
+        self.assertEqual(near["cents"], round(rates["rate_table"]["core"]["3"]["near"] * 100))
+
+    def test_an_unverified_cell_with_nothing_above_it_goes_manual(self):
+        """Falling up only works while there is something to fall up to."""
+        rates = self._complete_rates()
+        for band in [str(b) for b in range(3, 10)]:
+            rates["cell_provenance"][f"core.{band}.mid"]["verified"] = False
+        orders = self._with(rates)
+        q = orders.shipping_quote(self._basket(orders), "80001")
+        self.assertIsNone(q["cents"])
+        self.assertEqual(q["source"], "manual")
 
 
 class TestTheBandPlanAndCeiling(unittest.TestCase):
@@ -917,10 +970,36 @@ class TestPackagingAndDimensions(unittest.TestCase):
         self.assertEqual(self.orders.parcel_surcharge_cents(3000, 24), 450)
         self.assertEqual(self.orders.parcel_surcharge_cents(4000, 24), 2550)
 
+    def _rates_without_a_table_box(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            b for b in rates["packaging"]["boxes"] if b.get("use", "table") != "table"]
+        return rates
+
     def test_no_measured_box_blocks_zone_pricing(self):
         """Unmeasured packaging is an undercharge waiting to happen, so it gates go-live."""
-        self.assertIsNotNone(self.orders.packaging_problem())
-        self.assertFalse(self.orders.zone_pricing_ready())
+        rates = self._rates_without_a_table_box()
+        self.assertIsNotNone(self.orders.packaging_problem(rates))
+        self.assertFalse(self.orders.zone_cell_usable(rates),
+                         "with nothing backing the rates, no cell may be charged from")
+
+    def test_the_standard_box_is_a_constraint_and_that_is_what_is_verified(self):
+        """The live file's table box is "at or under 1 cu ft", not a particular carton.
+
+        That is not a dodge around the measurement. Below 1 cu ft dimensions do not affect a
+        weight-based rate AT ALL — established by quoting 2 lb to 90210 in a 0.40 cu ft box and a
+        0.92 cu ft box and getting $6.03 both times. So every rate in the table is valid for any
+        box inside the constraint, and which one the shop reaches for cannot change the price.
+        What still has to be true is that orders stay inside it, and that is enforced per order by
+        exceeds_standard_box() rather than trusted.
+        """
+        boxes = [b for b in self.orders.load_rates()["packaging"]["boxes"]
+                 if b.get("use", "table") == "table" and b.get("verified")]
+        self.assertEqual(len(boxes), 1, "exactly one thing may back the table")
+        self.assertEqual(boxes[0]["kind"], "constraint")
+        self.assertLessEqual(boxes[0]["cu_in"], 1728)
+        self.assertIsNone(self.orders.packaging_problem())
+        self.assertTrue(self.orders.zone_cell_usable())
 
     def test_a_measured_box_under_a_cubic_foot_clears_the_gate(self):
         rates = json.loads(json.dumps(self.orders.load_rates()))
@@ -1025,13 +1104,23 @@ class TestPackagingAndDimensions(unittest.TestCase):
         """20.5 x 15.5 x 10 = 3,178 cu in = 1.84 cu ft, past the 1 cu ft dim-weight threshold.
 
         It clears the other two — under 2 cu ft, under 22 in — but its dimensional weight is
-        22.9 lb, so every parcel in it bills as 22.9 lb to zones 5-9 whatever it holds.
+        22.9 lb, so every parcel in it bills as 22.9 lb to zones 5-9 whatever it holds. It stays
+        recorded in the file as the rejected candidate it is, so nobody re-derives it later.
         """
-        problem = self.orders.packaging_problem()
+        rates = self._rates_without_a_table_box()
+        rates["packaging"]["boxes"].append(
+            {"name": "candidate", "dims_in": [20.5, 15.5, 10], "cu_in": 3177.5,
+             "use": "table", "verified": True})
+        problem = self.orders.packaging_problem(rates)
         self.assertIsNotNone(problem)
         self.assertIn("22.9 lb", problem)
         self.assertIn("1728 cu in", problem, "it must name the limit, not just the failure")
-        self.assertFalse(self.orders.zone_pricing_ready())
+        self.assertFalse(self.orders.zone_cell_usable(rates))
+
+        live = [b for b in self.orders.load_rates()["packaging"]["boxes"]
+                if b["cu_in"] == 3177.5]
+        self.assertEqual(len(live), 1, "the rejected candidate stays on file")
+        self.assertFalse(live[0]["verified"], "and it is never what backs the table")
 
     def test_the_gate_measures_against_the_LIGHTEST_band_not_the_ceiling(self):
         """The bug this box exposed.
@@ -1051,7 +1140,11 @@ class TestPackagingAndDimensions(unittest.TestCase):
 
     def test_an_unmeasured_box_that_cannot_work_says_so_first(self):
         """Reporting 'not measured yet' would send someone to measure a box that cannot pass."""
-        problem = self.orders.packaging_problem()
+        rates = self._rates_without_a_table_box()
+        rates["packaging"]["boxes"].append(
+            {"name": "candidate", "dims_in": [20.5, 15.5, 10], "cu_in": 3177.5,
+             "use": "table", "verified": False})
+        problem = self.orders.packaging_problem(rates)
         self.assertIn("not verified either", problem)
         self.assertNotEqual(problem.split("(")[0].strip(),
                             "no measured table box on file")
@@ -1107,10 +1200,99 @@ class TestManualQuote(unittest.TestCase):
         self.assertLessEqual(oz, self.orders.max_quotable_oz())
 
     def test_manual_outranks_zone_and_estimate(self):
-        self.assertEqual(self.orders.shipping_source("90210", 600), "manual")
-        self.assertEqual(self.orders.shipping_source("90210", 100), "estimate")
-        self.assertEqual(self.orders.shipping_source(None, 600), "manual",
+        heavy = [({"category": "Shoes"}, "10", 14)]      # 563 oz, over the ceiling
+        light = [({"category": "Shirts"}, "M", 5)]
+        self.assertEqual(self.orders.shipping_quote(heavy, "90210")["source"], "manual")
+        self.assertEqual(self.orders.shipping_quote(heavy, None)["source"], "manual",
                          "too heavy is too heavy whether or not an address was given")
+        self.assertEqual(self.orders.shipping_quote(light, None)["source"], "estimate")
+
+    def test_each_manual_reason_says_which_wall_the_order_hit(self):
+        """Three different problems. One canned sentence about weight would be false for two.
+
+        The reason is shown to the buyer, so "this order is over 31 lb" on a 7.5 lb order that is
+        merely bulky is a claim the page is making up.
+        """
+        too_heavy = self.orders.shipping_quote([({"category": "Shoes"}, "10", 14)], "90210")
+        too_bulky = self.orders.shipping_quote([({"category": "Shoes"}, "10", 3)], "90210")
+        # far has no verified cell at any band yet, so an ordinary basket there is unpriceable.
+        unquoted = self.orders.shipping_quote([({"category": "Shirts"}, "M", 5)], "10001")
+
+        self.assertIn("lb", too_heavy["reason"])
+        self.assertIn("box larger", too_bulky["reason"])
+        self.assertNotIn(" lb", too_bulky["reason"],
+                         "a bulky order is not a heavy one and must not be told it is")
+        self.assertIn("area", unquoted["reason"])
+        self.assertEqual(len({too_heavy["reason"], too_bulky["reason"], unquoted["reason"]}), 3)
+
+    # ---- what the checkout panel does with a manual quote ----------------------------------
+    # No DOM here, so these read the source. They exist because each one was a real bug in it.
+
+    def test_the_manual_button_label_is_restored_when_the_order_becomes_priceable(self):
+        """A buyer mistypes a ZIP into an unpriceable lane and corrects it.
+
+        The manual branch set the button's text and there was no else, so the corrected order kept
+        a button reading "Request a shipping quote" while the form was about to take payment.
+        """
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        body = src[src.index("function setCheckoutShipping("):src.index("async function refreshCheckoutShipping")]
+        self.assertIn("applyPaymentCopy(total)", body,
+                      "the non-manual branch must put the flow's own copy back")
+        self.assertIn("} else {", body, "a one-way switch leaves the wrong label on the button")
+
+    def test_the_button_label_is_written_into_the_label_span_not_over_the_button(self):
+        """`payBtn.textContent = ...` deletes the #checkout-pay-label span inside it, and
+        applyPaymentCopy writes into that span — so the next call throws on a null."""
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        body = src[src.index("function setCheckoutShipping("):src.index("async function refreshCheckoutShipping")]
+        self.assertNotIn("payBtn.textContent", body)
+        self.assertIn("checkout-pay-label", body)
+
+    def test_a_manual_order_is_never_handed_to_stripe(self):
+        """The server refuses it with a 409 — but meeting that as an error after tapping a button
+        reading "Pay" is not a checkout experience, it is a malfunction."""
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        self.assertIn("PAYMENTS.enabled && !manual", src)
+
+    def test_the_reason_gets_its_own_block_not_the_shipping_row(self):
+        """It is a whole sentence. Inline in that flex row it wrapped to five lines on a phone and
+        pushed the figure off the right edge."""
+        html = open(os.path.join(APP_DIR, "index.html"), encoding="utf-8").read()
+        self.assertIn('id="checkout-manual-note"', html)
+        css = open(os.path.join(APP_DIR, "styles.css"), encoding="utf-8").read()
+        self.assertIn(".checkout-manual-note", css)
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        body = src[src.index("function setCheckoutShipping("):src.index("async function refreshCheckoutShipping")]
+        self.assertIn("checkout-manual-note", body)
+
+    def test_the_narrow_phone_rule_lets_the_money_rows_wrap(self):
+        """"Quoted by us" and "$105.00 + shipping" are several times the width of "$6.03"."""
+        css = open(os.path.join(APP_DIR, "styles.css"), encoding="utf-8").read()
+        block = css[css.index("@media (max-width: 420px)"):]
+        block = block[:block.index("\n}\n", block.index("{"))]
+        self.assertIn("checkout-subtotal-row", block)
+        self.assertIn("checkout-total-row", block)
+        self.assertIn("flex-wrap: wrap", block)
+
+    def test_the_browser_never_posts_a_placeholder_shipping_figure(self):
+        """It is ignored server-side either way. Sending one anyway is the habit that ends with a
+        made-up number somewhere it gets charged."""
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        self.assertIn('checkoutShippingSource === "manual" ? null : shippingFor(items)', src)
+        self.assertIn("shipping === null ? null : subtotal + shipping", src)
+
+    def test_a_bulky_order_well_under_the_ceiling_is_still_quoted_by_hand(self):
+        """Weight alone cannot see this, which is the whole reason for the volume proxy.
+
+        Three pairs of shoes weigh 7.5 lb — inside every band the table prices — while filling
+        more than the box every rate in it was quoted in. Pricing that off the table charges the
+        7.5 lb rate for a parcel that bills on volume to three of the four zone groups.
+        """
+        lines = [({"category": "Shoes"}, "10", 3)]
+        cents, oz = self.orders.shipping_cents(lines, "90210")
+        self.assertLess(oz, self.orders.max_quotable_oz(), "comfortably inside the weight ceiling")
+        self.assertTrue(self.orders.exceeds_standard_box(lines))
+        self.assertIsNone(cents, "bulk is a manual quote even when the weight is fine")
 
     def test_no_display_path_reports_zero_shipping_for_a_pending_order(self):
         """shipping_cents is 0 on those rows only because the column is NOT NULL.
@@ -1125,7 +1307,9 @@ class TestManualQuote(unittest.TestCase):
                       "the order-list path must not render a pending order's zero")
         self.assertIn('None if result.get("needs_manual_quote")', src,
                       "the order-creation response must not render it either")
-        self.assertIn("def _pending(row):", src)
+        store_src = open(os.path.join(APP_DIR, "db", "store.py"), encoding="utf-8").read()
+        self.assertIn("None if shipping_pending(o) else from_cents", store_src,
+                      "and neither must the buyer's own My Orders lookup")
 
     def test_the_migration_adds_the_flag_idempotently(self):
         """It runs on every boot, so it has to survive already being applied."""
@@ -1137,8 +1321,8 @@ class TestManualQuote(unittest.TestCase):
 
     def test_pending_tolerates_a_row_from_before_the_migration(self):
         """sqlite3.Row has no .get, and an old row has no such column."""
-        src = open(os.path.join(APP_DIR, "server.py"), encoding="utf-8").read()
-        block = src[src.index("def _pending(row):"):]
+        src = open(os.path.join(APP_DIR, "db", "store.py"), encoding="utf-8").read()
+        block = src[src.index("def shipping_pending(row):"):]
         block = block[:block.index("\ndef ")]
         self.assertIn("except (IndexError, KeyError)", block)
 
@@ -1149,8 +1333,15 @@ class TestManualQuote(unittest.TestCase):
         block = block[:block.index("\n}")]
         self.assertIn("Quoted by us", block)
         self.assertIn("+ shipping", block, "the total must read as subtotal plus an unknown")
-        self.assertIn('payAmount.textContent = manual ? ""', block,
-                      "the pay button must not show an amount that was never computed")
+        # The amount lives in a span that applyPaymentCopy writes. The manual branch must never
+        # reach that call, because it has no total to pass it — which is the guarantee, not any
+        # particular line. Written as "the manual branch does not compute money", it survives the
+        # button copy being rearranged, which it since has been.
+        manual_branch = block[block.index("if (manual) {", block.index("payLabel")):]
+        manual_branch = manual_branch[:manual_branch.index("} else {")]
+        self.assertNotIn("applyPaymentCopy", manual_branch,
+                         "the pay button must not show an amount that was never computed")
+        self.assertNotIn("money(total)", manual_branch)
 
     def test_every_call_site_passes_the_mode(self):
         """A caller that forgets it would silently price a heavy order off the flat ladder."""
@@ -1551,3 +1742,56 @@ class TestQuoteValidator(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------- how much is actually left to quote ---------------------------------------------------
+class TestCoverage(unittest.TestCase):
+    """What the remaining quotes buy, rather than what they block.
+
+    They block nothing: an unfilled cell is a manual quote now. So the only honest way to rank the
+    outstanding work is by how many orders each column would take off the owner's desk, and that
+    depends on where the destinations are — not on the order the groups happen to be declared in.
+    """
+
+    def setUp(self):
+        self.orders = load_orders()
+
+    def test_the_shares_are_taken_from_the_map_and_add_up(self):
+        share = self.orders.destination_share()
+        self.assertEqual(set(share), set(self.orders.group_names()))
+        self.assertAlmostEqual(sum(share.values()), 1.0, places=6)
+        self.assertGreater(share["far"], share["near"],
+                           "from a Tucson origin most of the country is far")
+
+    def test_a_column_prices_from_zero_up_to_its_heaviest_verified_band(self):
+        """Because zone_rate_cents falls UP, one number describes a whole column's coverage."""
+        mid = self.orders.priced_ceiling_oz("mid")
+        self.assertEqual(mid, 144.0, "mid is verified through 9 lb")
+        for oz in (8, 32, 144):
+            self.assertIsNotNone(self.orders.zone_shipping_cents(oz, "80001"))
+        self.assertIsNone(self.orders.zone_shipping_cents(145, "80001"),
+                          "and manual above it")
+
+    def test_a_column_with_no_verified_cell_has_no_ceiling(self):
+        self.assertIsNone(self.orders.priced_ceiling_oz("far"))
+        self.assertIsNone(self.orders.zone_shipping_cents(8, "10001"))
+
+    def test_the_report_is_ranked_by_what_filling_it_would_buy(self):
+        rows = self.orders.coverage_report()
+        self.assertEqual(rows[0]["group"], "far",
+                         "over half the map and nothing priced — the one worth a session")
+        shares = [r["share"] for r in rows]
+        self.assertEqual(shares, sorted(shares, reverse=True))
+
+    def test_a_filled_column_reports_nothing_outstanding(self):
+        rows = {r["group"]: r for r in self.orders.coverage_report()}
+        self.assertNotIn("sub", rows["mid"]["missing_bands"], "mid's core bands are all verified")
+        self.assertIn("13", rows["mid"]["missing_bands"], "its heavy bands are not")
+        self.assertEqual(rows["mid"]["quotes_to_complete"], len(rows["mid"]["missing_bands"]))
+
+    def test_an_unverified_cell_counts_as_missing_even_though_it_holds_a_price(self):
+        """A number in the file is not a rate. Provenance is what makes it one."""
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["cell_provenance"]["core.sub.near"]["verified"] = False
+        rows = {r["group"]: r for r in self.orders.coverage_report(rates)}
+        self.assertIn("sub", rows["near"]["missing_bands"])

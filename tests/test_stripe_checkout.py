@@ -218,12 +218,17 @@ def completed_event(session_id, order_ref, amount_cents, event_id=None, payment_
     }
 
 
+# Houston, zone 5 -> group 'mid', the only group with verified cells in every core band. Tests
+# that assert a charged figure need a lane the table can actually price.
+SHIP_TO = {"name": "Test Buyer", "address1": "1 Test St", "city": "Houston",
+           "state": "TX", "zip": "77001", "country": "US"}
+
+
 def start_checkout(items, email="buyer@example.com", key=None):
     return post("/api/checkout/session", {
         "email": email,
         "idempotency_key": key or f"test-{time.time()}-{len(stripe_calls)}",
-        "ship_to": {"name": "Test Buyer", "address1": "1 Test St", "city": "Houston",
-                    "state": "TX", "zip": "77001", "country": "US"},
+        "ship_to": dict(SHIP_TO),
         "items": items,
     })
 
@@ -392,27 +397,29 @@ class TestServerSidePricing(unittest.TestCase):
         self.assertEqual(row["subtotal_cents"], 10500)
         self.assertEqual(row["total_cents"], row["subtotal_cents"] + row["shipping_cents"])
 
-    def test_shipping_matches_the_existing_calculation(self):
-        """Shipping is the same weight-tier figure the cart has always shown."""
-        shirt = a_shirt(need=2)
-        before = len(stripe_calls)
+    def test_shipping_is_the_verified_zone_rate_not_the_placeholder(self):
+        """Shipping now comes from a cell somebody quoted, not the national-average ladder.
+
+        The flat SHIPPING_TIERS figures are placeholders nobody obtained; presenting one as the
+        charged price is the drift this codebase refuses elsewhere. Where a verified cell covers
+        the order's band and zone it is used, and where none does the order goes to a manual quote
+        rather than falling back to a made-up number.
+        """
+        shirt = a_shirt(need=5)
         status, out = start_checkout([
-            {"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 2},
+            {"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 5},
         ])
         self.assertEqual(status, 200, out)
         row = order_row(out["ref"])
+        oz = row["weight_oz"]
 
-        conn = db()
-        try:
-            product = conn.execute("SELECT * FROM products WHERE id=?", (shirt["id"],)).fetchone()
-            expected, oz = orders.shipping_cents([(product, shirt["size"], 2)])
-        finally:
-            conn.close()
-        self.assertEqual(row["shipping_cents"], expected)
-
-        opts = stripe_calls[before]["params"]["shipping_options"]
-        self.assertEqual(opts[0]["shipping_rate_data"]["fixed_amount"]["amount"], expected,
-                         "Stripe must charge the same shipping the cart quoted")
+        zoned = orders.zone_shipping_cents(oz, SHIP_TO["zip"])
+        self.assertIsNotNone(zoned, "this lane should have a verified cell for that band")
+        self.assertEqual(row["shipping_cents"], zoned,
+                         "the charged figure must be the verified rate, not the placeholder")
+        flat = next(pr for mx, pr in orders.SHIPPING_TIERS if oz <= mx)
+        self.assertNotEqual(zoned, flat,
+                            "if these coincide the test proves nothing; choose another band")
 
     def test_stripe_total_equals_the_order_total(self):
         """Line items plus the shipping option must add up to exactly what the DB recorded."""
@@ -881,6 +888,185 @@ class TestCheckoutStatus(unittest.TestCase):
         body = json.dumps(cfg)
         self.assertNotIn("sk_test", body)
         self.assertNotIn("whsec", body)
+
+
+# ---------- a manual-quote order holds stock, then lets go of it -------------------------------------
+class TestManualQuoteLifecycle(unittest.TestCase):
+    """An order nothing could price still takes stock off the shelf, so it still has to expire.
+
+    This is the whole risk the manual path introduces. A card order that goes quiet is swept after
+    30 minutes; a manual one is waiting on a person, so 30 minutes is far too short — but "waiting
+    on a person" with no clock at all means one abandoned bulk enquiry can hold twenty shirts out
+    of the catalogue forever, and nothing on the site would say why they were unbuyable.
+    """
+
+    def _quote_requested(self, qty=3):
+        """Place an order the table cannot price, and return (shirt, row)."""
+        shirt = a_shirt(need=qty)
+        status, out = post("/api/order", {
+            "email": "quote@example.com",
+            "idempotency_key": f"manual-{time.time()}-{qty}",
+            # far has no verified cell at any band, so an ordinary basket there is unpriceable.
+            "ship_to": {**SHIP_TO, "city": "New York", "state": "NY", "zip": "10001"},
+            "items": [{"id": shirt["id"], "name": shirt["name"], "size": shirt["size"],
+                       "qty": qty}],
+        })
+        self.assertEqual(status, 200, out)
+        return shirt, order_row(out["ref"]), out
+
+    def test_the_order_is_placed_with_no_shipping_price_rather_than_a_zero(self):
+        _shirt, row, out = self._quote_requested()
+        self.assertEqual(row["status"], "quote_requested")
+        self.assertTrue(out["needs_manual_quote"])
+        self.assertIsNone(out["shipping"], "$0.00 reads as free shipping, the one wrong answer")
+        self.assertIsNone(out["total"])
+        self.assertTrue(out["manual_quote_reason"])
+        self.assertEqual(row["shipping_pending"], 1,
+                         "the column is NOT NULL, so a flag is what says the zero is a placeholder")
+
+    def test_it_holds_stock_while_the_quote_is_being_worked_out(self):
+        shirt, _row, _out = self._quote_requested(qty=3)
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]),
+                         shirt["available_qty"] - 3,
+                         "an order awaiting a quote is a real order and reserves its units")
+
+    def test_the_card_ttl_does_not_sweep_it(self):
+        """30 minutes is the window a buyer has to finish paying. A person quoting by hand is not
+        on that clock, and sweeping at 30 minutes would cancel the order under them."""
+        shirt, row, _out = self._quote_requested()
+        held = available_qty(shirt["id"], shirt["size"])
+        conn = db()
+        try:
+            swept = orders.expire_pending(conn, ttl_seconds=0)
+        finally:
+            conn.close()
+        self.assertFalse(any(e["ref"] == row["order_ref"] for e in swept),
+                         "the card TTL must not reach a quote_requested order")
+        self.assertEqual(order_row(row["order_ref"])["status"], "quote_requested")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), held)
+
+    def test_its_own_ttl_sweeps_it_and_puts_the_units_back(self):
+        shirt, row, _out = self._quote_requested(qty=3)
+        held = available_qty(shirt["id"], shirt["size"])
+        conn = db()
+        try:
+            swept = orders.expire_pending(conn, manual_ttl_seconds=0)
+        finally:
+            conn.close()
+        self.assertTrue(any(e["ref"] == row["order_ref"] for e in swept))
+        self.assertEqual(order_row(row["order_ref"])["status"], "cancelled")
+        self.assertEqual(available_qty(shirt["id"], shirt["size"]), held + 3,
+                         "the units go back on the shelf, exactly as a card order's do")
+
+    def test_the_cancellation_says_which_clock_ran_out(self):
+        """Two reasons an order can be cancelled by the sweep, and the log has to tell them apart —
+        it is the only record of why a buyer's order vanished."""
+        _shirt, row, _out = self._quote_requested()
+        conn = db()
+        try:
+            orders.expire_pending(conn, manual_ttl_seconds=0)
+            note = conn.execute("""SELECT note FROM order_events WHERE order_id=?
+                                   ORDER BY id DESC LIMIT 1""", (row["id"],)).fetchone()["note"]
+        finally:
+            conn.close()
+        self.assertIn("quote", note)
+        self.assertNotIn("not paid", note)
+
+    def test_it_is_never_marked_paid(self):
+        """There is no amount to match against, so no event can honour it."""
+        _shirt, row, _out = self._quote_requested()
+        conn = db()
+        try:
+            with self.assertRaises(orders.OrderError):
+                orders.mark_paid(conn, row["id"], f"evt_manual_{time.time()}")
+        finally:
+            conn.close()
+        self.assertEqual(order_row(row["order_ref"])["status"], "quote_requested")
+
+    def test_stripe_refuses_an_order_it_cannot_price(self):
+        """The button never offers to pay for one of these, but the server is the thing that
+        decides — a hand-rolled POST reaches it without going past the button."""
+        shirt = a_shirt(need=3)
+        status, out = post("/api/checkout/session", {
+            "email": "quote@example.com",
+            "idempotency_key": f"manual-stripe-{time.time()}",
+            "ship_to": {**SHIP_TO, "city": "New York", "state": "NY", "zip": "10001"},
+            "items": [{"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 3}],
+        })
+        self.assertEqual(status, 409, out)
+        self.assertFalse(out.get("ok"))
+
+    def test_my_orders_does_not_show_the_placeholder_zero_as_free_shipping(self):
+        """The buyer's own lookup. It is the one place they can check an order they placed, and it
+        rendered $0.00 shipping on the very order whose price had not been worked out yet — the
+        zero is a NOT NULL column's placeholder, not a price."""
+        _shirt, row, _out = self._quote_requested()
+        with urllib.request.urlopen(
+                f"{BASE}/api/orders?email=quote@example.com&ref={row['order_ref']}",
+                timeout=10) as r:
+            found = json.loads(r.read())
+        self.assertEqual(len(found), 1)
+        self.assertIsNone(found[0]["shipping"])
+        self.assertIsNone(found[0]["total"])
+        self.assertTrue(found[0]["shipping_pending"])
+        self.assertEqual(found[0]["status"], "quote_requested")
+
+    def test_the_storefront_renders_a_pending_order_without_a_total(self):
+        """money(null) is "$0.00" or "$NaN" depending on the browser. Neither is the answer."""
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        self.assertIn("order.total == null", src)
+        self.assertIn("ORDER_STATUS_LABEL", src,
+                      "'quote_requested' is accurate and unreadable")
+
+    def test_there_is_one_definition_of_a_pending_shipping_price(self):
+        """It lived in server.py, so store.order_by_ref had no way to ask and quietly rendered the
+        zero. Two readers, one of them wrong, is the shape of every bug in this file."""
+        src = open(os.path.join(APP_DIR, "server.py"), encoding="utf-8").read()
+        self.assertIn("_pending = store.shipping_pending", src)
+        self.assertNotIn("def _pending(row):", src)
+
+    def test_the_reserve_hold_window_matches_too(self):
+        """The other clock the panel quotes at the buyer."""
+        import re
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        m = re.search(r"const RESERVATION_HOLD_MINUTES = ([0-9.]+)", src)
+        self.assertIsNotNone(m, "RESERVATION_HOLD_MINUTES not found in script.js")
+        self.assertEqual(float(m.group(1)) * 60, float(orders.RESERVATION_TTL_SECONDS))
+
+    def test_the_reserve_fine_print_is_written_not_left_to_the_markup(self):
+        """applyPaymentCopy is the restore path after a manual quote rewrites the line. A branch
+        that only sets copy in the OTHER flow is a one-way switch, and the manual wording survived
+        onto an order the panel had just priced — promising a shipping email nobody would send."""
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        body = src[src.index("function applyPaymentCopy("):]
+        reserve = body[body.index("if (!PAYMENTS.enabled) {"):body.index("payLabel.innerHTML = `Pay")]
+        self.assertIn("disclaimer.textContent", reserve)
+        self.assertIn("RESERVE_NOTICE_HTML", reserve,
+                      "the notice is rewritten by a manual quote and has to come back too")
+
+    def test_every_promise_on_the_panel_moves_with_the_manual_flow(self):
+        """The rule this project already holds for the payment flows: the eyebrow, the notice, the
+        button and the disclaimer each make a claim that is false in the other mode, so they move
+        together or not at all. A manual quote is a third mode and the same rule applies — "held
+        for 30 minutes, then DM to settle up" is wrong on an order we are going to email a price
+        for.
+        """
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        body = src[src.index("function setCheckoutShipping("):
+                   src.index("async function refreshCheckoutShipping")]
+        branch = body[body.index("if (manual) {", body.index("payLabel")):body.index("} else {")]
+        for owned in ("payLabel", "disclaimer", "notice"):
+            self.assertIn(owned, branch, f"the manual branch must move {owned} too")
+
+    def test_the_hold_window_matches_what_the_page_promises(self):
+        """The buyer is told a number of hours on the checkout panel. The sweep that enforces it
+        is server-side, so a number typed into the JS that disagrees promises a hold the shop does
+        not honour — the same parity rule the weight tables live under."""
+        import re
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        m = re.search(r"const MANUAL_QUOTE_HOLD_HOURS = ([0-9.]+)", src)
+        self.assertIsNotNone(m, "MANUAL_QUOTE_HOLD_HOURS not found in script.js")
+        self.assertEqual(float(m.group(1)) * 3600, float(orders.MANUAL_QUOTE_TTL_SECONDS))
 
 
 # ---------- the secret file is not served ------------------------------------------------------------

@@ -14,7 +14,7 @@
      are parsed. -->
 <link rel="icon" href="images/favicon.png" type="image/png" />
 <link rel="stylesheet" href="fonts/fonts.css?v=1" />
-<link rel="stylesheet" href="styles.css?v=64" />
+<link rel="stylesheet" href="styles.css?v=65" />
 </head>
 <body>
 
@@ -295,6 +295,11 @@
         <span class="price" id="checkout-total-price"></span>
       </div>
 
+      <!-- Why this order is quoted by hand, in a block of its own. The short "(2.4 lb — quoted by
+           us)" belongs beside the Shipping label; the whole sentence does not. Inline in that flex
+           row it wrapped to five lines on a phone and pushed the figure off the edge. -->
+      <p class="checkout-manual-note" id="checkout-manual-note" hidden></p>
+
       <!-- Claims here have to be things the page actually does. "Encrypted checkout" was not one:
            no payment is taken and no card data is in flight, so there is nothing being encrypted
            beyond ordinary HTTPS — and over the dev server's plain http:// not even that. -->
@@ -444,7 +449,7 @@
 
 
 
-<script src="script.js?v=64"></script>
+<script src="script.js?v=65"></script>
 </body>
 </html>
 

@@ -1538,6 +1538,37 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
   color: var(--gray-500);
 }
 
+/* Why an order is quoted by hand. A block, not an inline note beside the Shipping label: it is a
+   whole sentence, and inline it wrapped to five lines on a phone and pushed the figure off the
+   right edge of the row. Warning-toned rather than error-toned — nothing has gone wrong, the
+   order is going through. */
+.checkout-manual-note {
+  border: 1px solid var(--g800);
+  border-left: 2px solid var(--gray-300);
+  border-radius: 10px;
+  background: var(--g950);
+  padding: 11px 13px;
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--gray-300);
+}
+
+/* Under 420px the label and the figure stop sharing a line. "Quoted by us" and "$105.00 +
+   shipping" are several times the width of "$6.03", and on the narrowest phones the pair
+   overflowed the panel rather than wrapping. */
+@media (max-width: 420px) {
+  .checkout-subtotal-row,
+  .checkout-total-row {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .checkout-subtotal-row > span:first-child,
+  .checkout-total-row > span:first-child { flex: 1 1 100%; }
+  .checkout-subtotal-row > span:last-child,
+  .checkout-total-row > span:last-child { margin-left: auto; }
+}
+
 .form-row-3 { grid-template-columns: 2fr 1fr 1fr; }
 
 .optional {

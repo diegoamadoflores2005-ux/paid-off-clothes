@@ -437,6 +437,24 @@ def cmd_next(rates, orders):
     carrier, basis = rates.get("carrier"), rates.get("rate_basis")
     print(f"Table: {carrier} {'/'.join(orders.allowed_services(rates))}  ({basis} basis)")
     print(f"Origin: {rates.get('origin_zip')}\n")
+    # ONE SESSION FIRST. The columns are not equal: 'far' is over half the map and prices nothing,
+    # while a band nobody's stock can reach buys no orders at all. Leading with a flat list of every
+    # empty cell is what makes this look like 26 errands instead of one sitting.
+    cov = orders.coverage_report(rates)
+    light = [b for b in ("sub", "2", "3", "5") if b in set(orders.required_bands(rates))]
+    first = next((r for r in cov if r["quotes_to_complete"]), None)
+    if first:
+        worst = orders.worst_case_zone(first["group"], rates)
+        want = [b for b in light if b in first["missing_bands"]] or first["missing_bands"][:4]
+        state = (f"prices nothing above {first['priced_to_oz'] / 16:.2f} lb"
+                 if first["priced_to_oz"] else "has no verified rate at all")
+        print(f"START HERE — one session, {len(want)} rows, group '{first['group']}' "
+              f"({first['share'] * 100:.0f}% of the map, {state})"
+              f"\n     bands {', '.join(want)} to zone {worst}. Those cover a single piece up to")
+        print("     roughly ten, which is the shape of almost every order this shop takes.")
+        print("     Everything else on this list can wait: it is already a manual quote, which")
+        print("     costs an email rather than a sale.\n")
+
     groups = orders.group_names(rates)
     todo = [(("core", b, g))
             for b in (table.get("core") or {})
@@ -449,7 +467,9 @@ def cmd_next(rates, orders):
     for _s, b, g in todo:
         by_group.setdefault(g, []).append(b)
     zm = rates.get("zone_map") or {}
-    for g in groups:
+    print("EVERYTHING OUTSTANDING (none of it blocks launch):")
+    for r in cov:
+        g = r["group"]
         if g not in by_group:
             continue
         worst = orders.worst_case_zone(g, rates)

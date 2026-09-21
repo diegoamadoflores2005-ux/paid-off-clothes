@@ -242,10 +242,29 @@ def main():
                      if "--why" in args else ""))
         print(f"\n  {n} quotes to collect.")
 
+    # ---- what the remaining quotes actually buy -------------------------------------------------
+    # Not "what is blocking launch". Nothing is: an unfilled cell is a manual quote, not a refused
+    # order. So the outstanding work is ranked by how many orders it takes off the owner's desk,
+    # which is why the destination share is here rather than a bare count of empty cells.
+    print()
+    print("=" * 72)
+    print("COVERAGE — what each column prices today, and what filling it would buy\n")
+    print(f"  {'group':<13}{'of map':>8}{'prices up to':>15}   still to quote")
+    for row in orders.coverage_report(rates):
+        ceiling = ("—" if row["priced_to_oz"] is None
+                   else f"{row['priced_to_oz'] / 16:.2f} lb")
+        print(f"  {row['group']:<13}{row['share'] * 100:>7.1f}%{ceiling:>15}   "
+              f"{row['quotes_to_complete']}  ({', '.join(row['missing_bands']) or 'none'})")
+    print("\n  Above a column's ceiling, and in every column with no cell at all, orders are")
+    print("  QUOTED BY HAND. They are not blocked and they are never priced off the flat ladder.")
+    print("  So the minimum additional quotes required to launch is 0; these only reduce email.")
+
     print()
     print("=" * 72)
     if empty:
-        print("Nothing drives the site from this file yet — the flat ladder is still live.")
+        print("Verified cells price the site TODAY — per cell, not all-or-nothing.")
+        print("Everything they do not cover goes to a manual quote, so an empty cell costs")
+        print("the owner an email rather than the shop a sale.")
         print("Enter quotes, then run: python3 tools/apply_shipping_rates.py")
     return 0
 

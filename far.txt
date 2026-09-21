@@ -1,10 +1,25 @@
-# far column — zone 8, the dearest in that group, so one price covers zones 7 and 8.
-# Nine bands under the agreed plan. Weight field AND price visible in every screenshot.
+# far column — the launch session. FOUR rows, one sitting.
 #
-#   python3 tools/record_quote.py --session far.txt
-#   python3 tools/record_quote.py --session far.txt --record
+# far is 53% of every ZIP prefix in the chart and has no verified rate at all, so every order
+# going there is quoted by hand today. That is safe — nothing is blocked and nothing is priced
+# off a placeholder — but it is the biggest single reduction in manual quotes available.
 #
-# If 1 lb-style inversions appear, that is not an error — see --anomaly in the docs.
+# Zone 8 is the dearest zone in this group, so one price covers zones 7 and 8. Quoting lower
+# would ship every zone 8 order below cost, silently.
+#
+# Why only these four bands: 8 oz is a single tee or belt, 32 oz is two or three, 48 oz is a bag
+# or a pair of shoes or five tees, 80 oz is about ten tees. That is the shape of almost every
+# order this shop takes. The heavier bands stay manual until they are worth a second sitting.
+#
+#   python3 tools/record_quote.py --session far.txt            # check, write nothing
+#   python3 tools/record_quote.py --session far.txt --record   # write, only if every row passes
+#
+# Rules the tool enforces, so you do not have to remember them:
+#   - the weight field AND the price must both be visible in the same screenshot
+#   - record EVERY service line on screen, comma-separated, not just the one you would buy
+#   - nothing is written unless all four rows pass, together and against the existing table
+#   - an inversion (a heavier band cheaper than a lighter one) is not always an error here —
+#     the discount varies by band and zone 6 genuinely inverts at 1 lb. See --anomaly.
 
 dest 10001
 box 12x12x11
@@ -13,8 +28,3 @@ box 12x12x11
 32   USPS/Ground Advantage/?
 48   USPS/Ground Advantage/?
 80   USPS/Ground Advantage/?
-96   USPS/Ground Advantage/?
-144  USPS/Ground Advantage/?
-208  USPS/Ground Advantage/?
-320  USPS/Ground Advantage/?
-496  USPS/Ground Advantage/?

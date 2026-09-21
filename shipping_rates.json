@@ -2348,6 +2348,20 @@
     },
     "boxes": [
       {
+        "name": "standard (constraint, not a specific box)",
+        "kind": "constraint",
+        "dims_in": [
+          12,
+          12,
+          12
+        ],
+        "cu_in": 1728,
+        "use": "table",
+        "verified": true,
+        "what_verified_means_here": "The CONSTRAINT is verified, not a particular box. Below 1 cu ft dimensions do not affect a weight-based rate at all — established by quoting 2 lb to 90210 in a 0.40 cu ft box and a 0.92 cu ft box and getting $6.03 both times, and stated in the rate sheet. So every rate in this table is valid for ANY box at or under 1,728 cu in, and which one the shop reaches for cannot change the price.",
+        "operating_requirement": "Pack every table-priced order in a box at or under 1 cu ft with no side over 22 in. Orders that will not fit are sent to a manual quote by exceeds_standard_box(), so the requirement is enforced at quote time rather than trusted."
+      },
+      {
         "name": "everyday box (candidate)",
         "dims_in": [
           20.5,
@@ -2460,6 +2474,17 @@
           "verdict": "Rejected. It is true, but it makes packing depend on the destination, and one mis-packed order to a mid or far ZIP silently costs the shop the full gap."
         }
       ]
+    },
+    "standard_box_usable_cu_in": 1400,
+    "assumed_unit_cu_in": {
+      "_note": "ASSUMED, never measured, and deliberately generous. Over-estimating sends an order to a manual quote that might have fitted, costing one email. Under-estimating prices a parcel that needs a bigger box off the standard ladder, which is an undercharge the shop absorbs on every such order. The failure direction is chosen.",
+      "Shirts": 110,
+      "Belts": 70,
+      "Shorts": 120,
+      "Bags": 450,
+      "Shoes": 560,
+      "Tracksuits": 260,
+      "_default": 250
     }
   },
   "multi_package": {

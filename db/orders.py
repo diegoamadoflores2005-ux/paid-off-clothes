@@ -19,6 +19,13 @@ STATUSES = ("pending", "paid", "fulfilled", "cancelled", "failed", "refunded")
 # runs out of stock it still owns.
 RESERVATION_TTL_SECONDS = 30 * 60
 
+# A manual-quote order holds stock while a person prices its shipping, so 30 minutes is far too
+# short — nobody answers email that fast, and the buyer would lose the hold before hearing back.
+# 48 hours gives a real window and still guarantees the stock comes back. Without a TTL of its own
+# a quote_requested order would hold inventory forever, because expire_pending only ever looked at
+# status 'pending'.
+MANUAL_QUOTE_TTL_SECONDS = 48 * 60 * 60
+
 # The sweep runs opportunistically on request paths, so this stops a busy shop re-running it on
 # every single order.
 _SWEEP_MIN_INTERVAL = 60
@@ -91,28 +98,107 @@ def _weight_oz(product):
     return CATEGORY_WEIGHT_OZ.get(product["category"], DEFAULT_WEIGHT_OZ)
 
 
-def shipping_cents(lines, dest_zip=None):
-    """lines: [(product_row, size, qty)]; dest_zip when the buyer has given an address.
+def shipping_quote(lines, dest_zip=None, rates=None):
+    """The whole shipping decision for one basket, with the reason it came out that way.
 
-    Zone pricing is used when the verified table can price this order, and the flat ladder
-    otherwise — including every cart, which has no address yet. `shipping_source` below says which
-    applied, so the checkout panel can show the buyer a real figure rather than an estimate.
+    Returns {cents, weight_oz, source, reason}. `cents` is None exactly when `source` is "manual".
+
+    This is ONE function rather than a price and a separate "which rule applied" helper, because
+    those were two implementations of the same decision and they drifted: the helper still reported
+    "estimate" for a destination the pricer had already sent to a human. A buyer was going to be
+    shown an estimate for an order nothing could price.
+
+    Three outcomes, and the reason distinguishes them because they need different words on screen:
+
+      manual    - nothing may price this. Too heavy for the table, too bulky for the box it was
+                  quoted in, or a destination/band with no verified cell. The buyer is told we
+                  quote it by hand; the order still goes through.
+      zone      - a cell somebody read off the screen covers this band and this zone group.
+      estimate  - no address yet. Only the cart ever sees this, and it is labelled as an estimate.
     """
+    rates = load_rates() if rates is None else rates
     if not lines:
-        return 0, 0.0
+        return {"cents": 0, "weight_oz": 0.0, "source": "estimate", "reason": None}
+
     oz = sum(_weight_oz(p) * q for p, _s, q in lines) + PACKAGING_OZ
-    if needs_manual_quote(oz):
+    oz = float(oz)
+
+    def manual(reason):
         # None, not a number. Every caller has to decide what to do about an order it cannot
         # price, and a zero or a guess would let one slip through priced wrongly.
-        return None, float(oz)
+        return {"cents": None, "weight_oz": oz, "source": "manual", "reason": reason}
+
+    ceiling = max_quotable_oz(rates)
+    if needs_manual_quote(oz, rates):
+        return manual(f"This order weighs {oz/16:.1f} lb, over the {ceiling/16:.0f} lb we can "
+                      f"price automatically. It ships in a larger box whose cost depends on its "
+                      f"dimensions, so we quote it by hand rather than guess.")
+    if exceeds_standard_box(lines, rates):
+        return manual("This order needs a box larger than our standard one, and a bigger box is "
+                      "priced on its size as well as its weight. We quote those by hand so you "
+                      "are charged what it really costs.")
+
     if dest_zip:
-        zoned = zone_shipping_cents(oz, dest_zip)
+        zoned = zone_shipping_cents(oz, dest_zip, rates)
         if zoned is not None:
-            return zoned, float(oz)
-    for max_oz, price in SHIPPING_TIERS:
+            return {"cents": zoned, "weight_oz": oz, "source": "zone", "reason": None}
+        # A destination with no verified cell for this weight is NOT priced off the placeholder
+        # ladder. Those numbers are national averages nobody quoted, and presenting one as the
+        # charged price is exactly the drift this codebase refuses everywhere else. It goes to a
+        # human instead.
+        return manual("We have not yet quoted a rate for an order this size going to your area, "
+                      "so we price it by hand rather than show you a number we made up. It "
+                      "usually takes a few hours.")
+
+    # No address yet — this is the cart. The flat ladder is an estimate, labelled as one, and never
+    # reaches the checkout panel as a final figure.
+    price = SHIPPING_OVER_MAX
+    for max_oz, tier_price in SHIPPING_TIERS:
         if oz <= max_oz:
-            return price, float(oz)
-    return SHIPPING_OVER_MAX, float(oz)
+            price = tier_price
+            break
+    return {"cents": price, "weight_oz": oz, "source": "estimate", "reason": None}
+
+
+def shipping_cents(lines, dest_zip=None):
+    """(cents, weight_oz) for one basket; cents is None when it needs a manual quote."""
+    q = shipping_quote(lines, dest_zip)
+    return q["cents"], q["weight_oz"]
+
+
+def assumed_unit_cu_in(category, rates=None):
+    """Volume one unit occupies as packed. ASSUMED, and deliberately generous.
+
+    No per-item volume has been measured. These are set high on purpose: over-estimating sends an
+    order to a manual quote that might have fitted the standard box, which costs one email.
+    UNDER-estimating would price a parcel that needs a bigger box off the standard ladder, and that
+    is an undercharge the shop absorbs on every such order. The failure direction is chosen.
+    """
+    rates = load_rates() if rates is None else rates
+    vol = (rates.get("packaging") or {}).get("assumed_unit_cu_in") or {}
+    return float(vol.get(category, vol.get("_default", 200)))
+
+
+def order_cu_in(lines, rates=None):
+    """Rough packed volume of an order, from the assumed per-unit figures."""
+    rates = load_rates() if rates is None else rates
+    # Subscript, not .get — these are sqlite3.Row objects, which have no .get. _weight_oz() next
+    # door already reads them this way; writing p.get("category") here broke the whole Stripe suite.
+    return sum(assumed_unit_cu_in(p["category"], rates) * q for p, _s, q in lines)
+
+
+def exceeds_standard_box(lines, rates=None):
+    """True when this order plausibly needs a box bigger than the one the rates were quoted in.
+
+    Bulk is not only a weight problem. Three pairs of shoes weigh 7.5 lb — comfortably inside every
+    band — while filling far more volume than a mailer holds, and a box over 1 cu ft bills on volume
+    to three of the four zone groups. Weight alone cannot see that.
+    """
+    rates = load_rates() if rates is None else rates
+    usable = (rates.get("packaging") or {}).get("standard_box_usable_cu_in")
+    if not usable:
+        return False
+    return order_cu_in(lines, rates) > float(usable)
 
 
 def needs_manual_quote(oz, rates=None):
@@ -129,18 +215,6 @@ def needs_manual_quote(oz, rates=None):
     rates = load_rates() if rates is None else rates
     ceiling = max_quotable_oz(rates)
     return ceiling is not None and float(oz) > ceiling
-
-
-def shipping_source(dest_zip=None, oz=None):
-    """Which rule priced this order: 'manual', 'zone' or 'estimate'.
-
-    'manual' outranks the others — a too-heavy order cannot be priced by any of them.
-    """
-    if oz is not None and needs_manual_quote(oz):
-        return "manual"
-    if not dest_zip or not zone_pricing_ready():
-        return "estimate"
-    return "zone" if group_for_zone(zone_for_zip(dest_zip)) else "estimate"
 
 
 def _resolve_product(conn, product_id, name):
@@ -227,19 +301,17 @@ def quote(conn, requested, dest_zip=None):
             "category": r["product"]["category"],
         })
 
-    ship, oz = shipping_cents([(r["product"], r["size"], r["qty"]) for r in resolved], dest_zip)
-    manual = ship is None
+    # One call decides the figure, which rule produced it, and what to tell the buyer. Deriving the
+    # last two separately is how a panel ends up showing an estimate for an order nothing priced.
+    ship = shipping_quote([(r["product"], r["size"], r["qty"]) for r in resolved], dest_zip)
+    manual = ship["cents"] is None
     return {"lines": lines, "subtotal_cents": subtotal,
-            "shipping_cents": None if manual else ship,
-            "total_cents": subtotal if manual else subtotal + ship,
-            "weight_oz": oz,
-            "shipping_source": shipping_source(dest_zip, oz),
+            "shipping_cents": ship["cents"],
+            "total_cents": subtotal if manual else subtotal + ship["cents"],
+            "weight_oz": ship["weight_oz"],
+            "shipping_source": ship["source"],
             "needs_manual_quote": manual,
-            "manual_quote_reason": (
-                f"This order weighs {oz/16:.1f} lb, over the {max_quotable_oz()/16:.0f} lb we can "
-                f"price automatically. It ships in a larger box whose cost depends on its "
-                f"dimensions, so we quote it by hand rather than guess."
-            ) if manual else None}
+            "manual_quote_reason": ship["reason"]}
 
 
 # ---- inventory ---------------------------------------------------------------------------------
@@ -420,7 +492,7 @@ def cancel_order(conn, order_id, reason="cancelled", status="cancelled", event_i
             if o["status"] in ("cancelled", "failed"):
                 conn.commit()
                 return {"ok": True, "duplicate": True}
-            if o["status"] != "pending":
+            if o["status"] not in ("pending", "quote_requested"):
                 raise OrderError(f"Cannot cancel an order that is {o['status']}.")
             conn.execute("DELETE FROM inventory_reservations WHERE order_id=?", (order_id,))
             conn.execute("""UPDATE orders SET status=?, inventory_state='released', updated_at=?
@@ -470,7 +542,8 @@ def refund_order(conn, order_id, event_id, restore_stock=True, provider="manual"
             raise
 
 
-def expire_pending(conn, ttl_seconds=RESERVATION_TTL_SECONDS, now=None):
+def expire_pending(conn, ttl_seconds=RESERVATION_TTL_SECONDS, now=None,
+                   manual_ttl_seconds=MANUAL_QUOTE_TTL_SECONDS):
     """Cancel pending orders whose reservation has run out, releasing their stock.
 
     Safe to run as often as you like. Two independent reasons:
@@ -485,16 +558,24 @@ def expire_pending(conn, ttl_seconds=RESERVATION_TTL_SECONDS, now=None):
     sweep hits the UNIQUE constraint on payment_events and becomes a no-op rather than a repeat.
     """
     now = time.time() if now is None else now
-    cutoff = now - ttl_seconds
+    # Two clocks, because the two kinds of order are waiting for different things: a pending order
+    # waits for a card, a quote_requested one waits for a person. Both are swept by the same pass
+    # so neither can be forgotten, and each releases its stock the same way.
     rows = conn.execute(
-        "SELECT id, order_ref, placed_at FROM orders WHERE status='pending' AND placed_at < ?",
-        (cutoff,)).fetchall()
+        """SELECT id, order_ref, placed_at, status FROM orders
+           WHERE (status='pending'         AND placed_at < ?)
+              OR (status='quote_requested' AND placed_at < ?)""",
+        (now - ttl_seconds, now - manual_ttl_seconds)).fetchall()
     expired = []
     for r in rows:
         event_id = f"expire_{r['id']}_{int(r['placed_at'])}"
+        ttl = manual_ttl_seconds if r["status"] == "quote_requested" else ttl_seconds
+        what = ("shipping quote not completed within "
+                f"{int(ttl / 3600)} hours" if r["status"] == "quote_requested"
+                else f"not paid within {int(ttl / 60)} minutes")
         try:
-            res = cancel_order(conn, r["id"], "reservation expired — not paid within "
-                               f"{int(ttl_seconds / 60)} minutes", "cancelled", event_id=event_id)
+            res = cancel_order(conn, r["id"], f"reservation expired — {what}",
+                               "cancelled", event_id=event_id)
             if not res.get("duplicate"):
                 expired.append({"id": r["id"], "ref": r["order_ref"],
                                 "age_minutes": round((now - r["placed_at"]) / 60, 1)})
@@ -711,6 +792,80 @@ def required_cells(rates=None):
     return cells
 
 
+def destination_share(rates=None):
+    """What fraction of mapped ZIP prefixes each group holds. A rough weight for "how much does
+    filling this group's column buy", since nothing here knows real order volume yet."""
+    rates = load_rates() if rates is None else rates
+    zmap = rates.get("zone_map") or {}
+    counts = {g: 0 for g in group_names(rates)}
+    for _prefix, zone in zmap.items():
+        g = group_for_zone(zone, rates)
+        if g in counts:
+            counts[g] += 1
+    total = sum(counts.values())
+    return {g: (n / total if total else 0.0) for g, n in counts.items()}
+
+
+def priced_ceiling_oz(group, rates=None):
+    """The heaviest parcel this group can currently be charged for, or None if it has no cell.
+
+    Because zone_rate_cents falls UP to the cheapest verified band at or above the parcel's own, a
+    group is priceable from zero up to its heaviest verified band and manual above it. So one
+    number describes a whole column's coverage.
+    """
+    rates = load_rates() if rates is None else rates
+    table = rates.get("rate_table") or {}
+    best = None
+    for lb, section, band in table_bands(table):
+        cell = ((table.get(section) or {}).get(band) or {}).get(group)
+        if cell is None or not cell_is_verified(section, band, group, rates):
+            continue
+        oz = lb * 16.0 if lb else 15.99
+        if best is None or oz > best:
+            best = oz
+    ceiling = max_quotable_oz(rates)
+    if best is not None and ceiling is not None:
+        best = min(best, ceiling)
+    return best
+
+
+def coverage_report(rates=None):
+    """Per group: how far up the ladder it prices today, and the cheapest way to get further.
+
+    This is the answer to "how many more quotes do I actually need", and the honest answer is
+    ZERO — an unfilled cell is a manual quote now, not a blocked checkout. What the remaining
+    quotes buy is fewer emails, so they are ranked by what they buy rather than listed as a wall.
+
+    `missing` is the bands this group has no verified cell for at or below its own ceiling, plus
+    every band above it. `share` is how much of the map the group covers, so the ranking reflects
+    where the orders come from rather than the order the groups happen to be declared in.
+    """
+    rates = load_rates() if rates is None else rates
+    table = rates.get("rate_table") or {}
+    want = [b for _lb, _sec, b in table_bands(table) if b in set(required_bands(rates))]
+    share = destination_share(rates)
+    out = []
+    for g in group_names(rates):
+        missing = []
+        for lb, section, band in table_bands(table):
+            if band not in set(want):
+                continue
+            if not cell_is_verified(section, band, g, rates):
+                missing.append(band)
+        ceiling = priced_ceiling_oz(g, rates)
+        out.append({
+            "group": g,
+            "share": share.get(g, 0.0),
+            "priced_to_oz": ceiling,
+            "missing_bands": missing,
+            "quotes_to_complete": len(missing),
+        })
+    # Most destinations first, and within that the column that is furthest from done. Filling a
+    # column nobody ships to is work that buys nothing.
+    out.sort(key=lambda r: (-r["share"], -r["quotes_to_complete"]))
+    return out
+
+
 # USPS dimensional-weight and surcharge thresholds. From the Pirate Ship rate sheet ("Packages
 # exceeding 1 cubic foot are charged the dimensional weight (L x W x H / 139) if greater than the
 # actual weight") and their nonstandard-fee schedule. Not estimates.
@@ -800,7 +955,15 @@ def packaging_problem(rates=None):
 
 
 def _box_volume_problem(boxes, rates):
-    """Whether the largest of these boxes can back the table's rates, or None."""
+    """Whether the largest of these boxes can back the table's rates, or None.
+
+    A box may be a CONSTRAINT rather than a specific object: "anything at or under 1 cu ft". That
+    is not a dodge — below 1 cu ft dimensions do not affect a weight-based rate at all, verified
+    here by quoting one weight in two boxes of different volumes and getting the same price. So the
+    rates are valid for any box inside the constraint, and which one the shop reaches for does not
+    change the price. What the shop must do is keep orders inside it, which is what
+    exceeds_standard_box() enforces per order.
+    """
     if not boxes:
         return None
     biggest = max(float(b["cu_in"]) for b in boxes)
@@ -1085,7 +1248,25 @@ def table_bands(table):
     return sorted(out)
 
 
-def zone_rate_cents(oz, group, table):
+def cell_is_verified(section, band, group, rates=None):
+    """Whether this one cell may be charged from. The per-cell form of unverified_cells().
+
+    With the table no longer required to be complete, verification moves from a whole-table gate to
+    a per-cell one: a filled cell is used only if its own provenance says someone read that figure
+    off the screen, on this table's service and rate basis.
+    """
+    rates = load_rates() if rates is None else rates
+    entry = (rates.get("cell_provenance") or {}).get(f"{section}.{band}.{group}")
+    if not entry or not entry.get("verified"):
+        return False
+    allowed = allowed_services(rates)
+    if allowed and entry.get("service") not in allowed:
+        return False
+    basis = rates.get("rate_basis")
+    return not (basis and entry.get("rate_basis") != basis)
+
+
+def zone_rate_cents(oz, group, table, rates=None):
     """The CHEAPEST rate at or above this parcel's band — not necessarily its own band's rate.
 
     Two things make that the right answer rather than a shortcut.
@@ -1105,6 +1286,7 @@ def zone_rate_cents(oz, group, table):
     that, which is both the true cost and the cheapest honest price for the buyer — and it makes
     the CHARGED ladder monotonic even where the tariff is not.
     """
+    rates = load_rates() if rates is None else rates
     want_lb = 0 if band_for_oz(oz) == "sub" else int(band_for_oz(oz))
     best = None
     # Above the ceiling the table says nothing rather than guessing. The old over_max fallback was
@@ -1115,18 +1297,40 @@ def zone_rate_cents(oz, group, table):
         if lb < want_lb:
             continue
         cell = ((table.get(section) or {}).get(key) or {}).get(group)
-        if cell is not None and (best is None or float(cell) < best):
+        if cell is None or not cell_is_verified(section, key, group, rates):
+            continue
+        if best is None or float(cell) < best:
             best = float(cell)
-    if best is not None:
-        return round(best * 100)
-    over = (table.get("over_max") or {}).get(group)
-    return None if over is None else round(float(over) * 100)
+    # No over_max fallback any more. It was one flat price for everything above the table, which is
+    # an undercharge whenever the parcel is heavier than the weight that price was quoted for. An
+    # order with no verified cell at or above its band gets a manual quote instead.
+    return None if best is None else round(best * 100)
+
+
+def zone_cell_usable(rates=None):
+    """Whether verified cells may be charged from at all: map present, table sound, box measured.
+
+    What it no longer requires is COMPLETENESS. Each cell still has to be individually verified —
+    unverified_cells() governs that per cell inside zone_rate_cents — but a gap elsewhere in the
+    table no longer stops a filled cell being used.
+    """
+    rates = load_rates() if rates is None else rates
+    if not (rates.get("zone_map") or {}):
+        return False
+    if rate_table_problems(rates) or package_problem(rates) or packaging_problem(rates):
+        return False
+    return max_quotable_oz(rates) is not None
 
 
 def zone_shipping_cents(oz, dest_zip, rates=None):
     """Zone-priced postage in cents, or None if this order cannot be priced that way."""
     rates = load_rates() if rates is None else rates
-    if not zone_pricing_ready(rates):
+    # Per-cell, not all-or-nothing. The old gate demanded every one of 36 cells before any order
+    # could be priced by zone, because the alternative was falling back to the placeholder ladder
+    # and pricing two identical baskets by different rules. With a manual quote as the fallback
+    # instead, that objection disappears: an order is either charged a rate someone verified, or
+    # handed to a person. Neither is a guess, so a half-filled table is safe to launch on.
+    if not zone_cell_usable(rates):
         return None
     ceiling = max_quotable_oz(rates)
     if ceiling is not None and float(oz) > ceiling:
@@ -1134,4 +1338,4 @@ def zone_shipping_cents(oz, dest_zip, rates=None):
     group = group_for_zone(zone_for_zip(dest_zip, rates), rates)
     if group is None:
         return None
-    return zone_rate_cents(oz, group, rates.get("rate_table") or {})
+    return zone_rate_cents(oz, group, rates.get("rate_table") or {}, rates)

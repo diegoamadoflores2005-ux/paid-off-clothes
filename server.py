@@ -119,16 +119,10 @@ PRIVATE_DIRS = {"db", "backups", "tools"}
 CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
-def _pending(row):
-    """True when this order's shipping is awaiting a manual quote.
-
-    sqlite3.Row has no .get, and the column is absent on a database that predates migration 005,
-    so this tolerates both rather than raising on an old row.
-    """
-    try:
-        return bool(row["shipping_pending"])
-    except (IndexError, KeyError):
-        return False
+# One definition, in db/store.py next to the query that builds those rows. It was here, and
+# store.order_by_ref — the buyer's own My Orders lookup — quietly rendered the placeholder zero as
+# free shipping because it had no way to ask.
+_pending = store.shipping_pending
 
 
 def csv_safe(value):

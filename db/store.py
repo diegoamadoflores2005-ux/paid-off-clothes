@@ -62,6 +62,23 @@ def clicks_doc():
     finally: conn.close()
 
 
+def shipping_pending(row):
+    """True when this order's shipping is awaiting a manual quote.
+
+    The orders.shipping_cents column is NOT NULL, so an order nobody could price stores a zero
+    there and this flag is what says that zero is a placeholder. Every path that RENDERS a price
+    has to ask, because "$0.00" tells the buyer shipping was free. It lives here, next to the query
+    that builds those rows, so a new reader finds it rather than reinventing the zero.
+
+    sqlite3.Row has no .get, and the column is absent on a database that predates migration 005,
+    so this tolerates both rather than raising on an old row.
+    """
+    try:
+        return bool(row["shipping_pending"])
+    except (IndexError, KeyError):
+        return False
+
+
 def order_by_ref(email, ref):
     """Look up exactly one order, scoped to both the email AND the order reference the buyer was
     shown at checkout. Knowing someone's email alone is not enough to see their order history and
@@ -86,8 +103,12 @@ def order_by_ref(email, ref):
                           "SELECT * FROM order_items WHERE order_id=? ORDER BY position",
                           (o["id"],)).fetchall()],
             "subtotal": from_cents(o["subtotal_cents"]),
-            "shipping": from_cents(o["shipping_cents"]),
-            "total": from_cents(o["total_cents"]),
+            # None, not 0.00, while a quote is outstanding. My Orders is the one place a buyer can
+            # look up an order they placed, and a zero here told them shipping was free on the
+            # very order whose price has not been worked out yet.
+            "shipping": None if shipping_pending(o) else from_cents(o["shipping_cents"]),
+            "total": None if shipping_pending(o) else from_cents(o["total_cents"]),
+            "shipping_pending": shipping_pending(o),
             "weight_oz": o["weight_oz"],
             "ship_to": {"name": o["ship_name"], "address1": o["ship_address1"],
                         "address2": o["ship_address2"], "city": o["ship_city"],

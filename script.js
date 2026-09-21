@@ -139,6 +139,21 @@ const SHIPPING_OVER_MAX = 22; // anything heavier than the last tier
 // — they go to a human for a real quote. MIRRORS max_quotable_oz in shipping_rates.json, and
 // tests/test_shipping_weights.py fails if the two drift apart.
 const MANUAL_QUOTE_OVER_OZ = 496;
+// How long a manual-quote order holds its stock. Mirrors MANUAL_QUOTE_TTL_SECONDS in db/orders.py;
+// the sweep that releases it is server-side, so a number typed here that disagrees promises the
+// buyer a hold the shop does not honour. Parity is tested.
+const MANUAL_QUOTE_HOLD_HOURS = 48;
+// And the card/reserve hold, mirroring RESERVATION_TTL_SECONDS. Same reason: the sweep is
+// server-side, so a number here that disagrees promises a hold the shop does not honour.
+const RESERVATION_HOLD_MINUTES = 30;
+
+// The reserve flow's notice, in JS because applyPaymentCopy is now a RESTORE path: a manual quote
+// rewrites this block, so leaving the reserve wording only in index.html meant it never came back.
+const RESERVE_NOTICE_HTML =
+  "<strong>Card payment isn\u2019t live yet.</strong> Place the order below and it\u2019s held in "
+  + `your name for ${RESERVATION_HOLD_MINUTES} minutes \u2014 then DM `
+  + '<a href="https://instagram.com/paidoffclothes" target="_blank" rel="noopener">@paidoffclothes</a>'
+  + " to settle up. Nothing is charged here and no card details are collected.";
 
 function needsManualQuote(lines) {
   return lines.length > 0 && orderWeightOz(lines) > MANUAL_QUOTE_OVER_OZ;
@@ -1222,8 +1237,9 @@ function openCheckout(items) {
 
   const payBtn = document.getElementById("checkout-pay-btn");
   payBtn.disabled = false;
-  applyPaymentCopy(total);
   // Opens on the flat-ladder estimate, then replaces it the moment a ZIP resolves to a zone.
+  // setCheckoutShipping owns the button and the fine print in both modes and calls
+  // applyPaymentCopy itself, so calling it here too would only race with the answer.
   setCheckoutShipping(shipping, needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
   refreshCheckoutShipping();
 
@@ -1243,7 +1259,10 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
   triggerLabelEl.textContent = "Processing...";
   const items = checkoutItems;
   const subtotal = lineTotal(items);
-  const shipping = shippingFor(items);
+  // null, not the flat-ladder estimate, when nothing could price this order. The server recomputes
+  // either way and ignores what arrives — but sending a placeholder as if it were the figure is
+  // the habit that puts a made-up number somewhere it gets charged.
+  const shipping = checkoutShippingSource === "manual" ? null : shippingFor(items);
   const val = (id) => document.getElementById(id).value.trim();
 
   // Kept as separate fields because Pirate Ship's spreadsheet upload needs one column each.
@@ -1270,7 +1289,7 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
       email,
       subtotal,
       shipping,
-      total: subtotal + shipping,
+      total: shipping === null ? null : subtotal + shipping,
       weight_oz: orderWeightOz(items),
       ship_to,
       idempotency_key: checkoutKey,
@@ -1296,8 +1315,12 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
       document.getElementById("checkout-form-view").hidden = true;
       document.getElementById("checkout-success-view").hidden = false;
       // Not "Payment successful": nothing has been paid. Saying otherwise is the same dishonesty
-      // as collecting card numbers that go nowhere.
-      document.getElementById("payment-alert-title").textContent = "Order reserved — no payment taken";
+      // as collecting card numbers that go nowhere. A manual order is not "reserved" either — the
+      // headline has to match what actually happened, which is that a quote is on its way.
+      document.getElementById("payment-alert-title").textContent =
+        checkoutShippingSource === "manual"
+          ? "Shipping quote requested — no payment taken"
+          : "Order reserved — no payment taken";
       document.getElementById("payment-alert-desc").textContent =
         successMessage + (out.ref ? ` Your order reference is ${out.ref}.` : "");
     })
@@ -1323,32 +1346,60 @@ function setCheckoutShipping(shipping, source, group, manualReason) {
   const subtotal = lineTotal(checkoutItems);
   const manual = source === "manual" || shipping === null || shipping === undefined;
   const total = manual ? null : subtotal + shipping;
+  const lb = (orderWeightOz(checkoutItems) / 16).toFixed(1);
 
   document.getElementById("checkout-shipping").textContent = manual ? "Quoted by us" : money(shipping);
   document.getElementById("checkout-total-price").textContent =
     manual ? `${money(subtotal)} + shipping` : money(total);
 
-  const lb = (orderWeightOz(checkoutItems) / 16).toFixed(1);
+  // The short parenthetical goes beside the Shipping label; the sentence explaining a manual quote
+  // goes in its own block below. Inline, that sentence wrapped to five lines on a phone and pushed
+  // the figure off the right edge of the row.
   const note = document.getElementById("checkout-ship-note");
   if (note) {
-    if (manual) {
-      // Say why, in the buyer's terms. "Contact us" with no reason reads as a malfunction.
-      note.textContent = manualReason
-        || `(${lb} lb — too large for our automatic rates, so we'll quote it by hand)`;
-    } else {
-      note.textContent = source === "zone"
-        ? `(${lb} lb, Ground Advantage, ${group || "your"} zone)`
-        : `(${lb} lb, estimated — enter your ZIP for the exact rate)`;
-    }
+    if (manual) note.textContent = `(${lb} lb — quoted by hand)`;
+    else if (source === "zone") note.textContent = `(${lb} lb, Ground Advantage, ${group || "your"} zone)`;
+    else note.textContent = `(${lb} lb, estimated — enter your ZIP for the exact rate)`;
   }
-  const payAmount = document.getElementById("checkout-pay-amount");
-  if (payAmount) payAmount.textContent = manual ? "" : money(total);
 
-  const payBtn = document.getElementById("checkout-pay-btn") || document.getElementById("co-submit");
-  if (payBtn) {
-    payBtn.dataset.manualQuote = manual ? "1" : "";
-    if (manual) payBtn.textContent = "Request a shipping quote";
+  const why = document.getElementById("checkout-manual-note");
+  if (why) {
+    // Say why, in the buyer's terms. "Contact us" with no reason reads as a malfunction.
+    why.textContent = manual
+      ? `${manualReason || "This order needs a shipping quote we work out by hand."} `
+        + `Nothing is charged now — we email you the cost and your pieces are held for `
+        + `${MANUAL_QUOTE_HOLD_HOURS} hours.`
+      : "";
+    why.hidden = !manual;
   }
+
+  // Write into the LABEL span, never the button's own textContent: that span is what
+  // applyPaymentCopy() fills, so replacing the button's text deletes it and the next call throws.
+  // And there has to be an else — without one, a buyer who typed an unpriceable ZIP and corrected
+  // it kept "Request a shipping quote" on a button that was about to take their money.
+  const payLabel = document.getElementById("checkout-pay-label");
+  const disclaimer = document.getElementById("checkout-disclaimer");
+  const notice = document.getElementById("checkout-notice");
+  if (manual) {
+    if (payLabel) payLabel.textContent = "Request a shipping quote";
+    if (disclaimer) {
+      disclaimer.textContent = `No payment is taken and no card details are collected. We reply `
+        + `with the shipping cost; your items are held for ${MANUAL_QUOTE_HOLD_HOURS} hours.`;
+    }
+    // The loudest promise on the panel, and in both other flows it says the order is held for 30
+    // minutes and to DM to settle up. Neither is true here: the hold is 48 hours and the next move
+    // is ours, not the buyer's. Copy moves with the flow — all of it, not just the button.
+    if (notice) {
+      notice.innerHTML = `<strong>This order is quoted by hand.</strong> Place it below and we'll `
+        + `email you the shipping cost, usually within a few hours. Your pieces are held for `
+        + `${MANUAL_QUOTE_HOLD_HOURS} hours while you decide. Nothing is charged until you agree `
+        + `to the total.`;
+    }
+  } else {
+    // Restores the label, the amount span and the fine print that belongs to the active flow.
+    applyPaymentCopy(total);
+  }
+
   checkoutShippingSource = manual ? "manual" : source;
 }
 
@@ -1421,6 +1472,15 @@ function applyPaymentCopy(total) {
 
   if (!PAYMENTS.enabled) {
     payLabel.innerHTML = `Reserve <span id="checkout-pay-amount">${money(total)}</span>`;
+    // Written out rather than left to the markup's default. This function is the restore path
+    // after a manual quote has rewritten the line, and a branch that only ever sets copy in the
+    // OTHER flow is a one-way switch: the manual wording survived onto an order the panel had
+    // just priced, promising a shipping email nobody was going to send.
+    if (disclaimer) {
+      disclaimer.textContent = `No payment is taken here and no card details are collected. `
+        + `Your items are held for ${RESERVATION_HOLD_MINUTES} minutes.`;
+    }
+    if (notice) notice.innerHTML = RESERVE_NOTICE_HTML;
     return;
   }
 
@@ -1592,7 +1652,12 @@ function initCheckout() {
     const label = checkoutItems.length > 1 ? `Your ${checkoutItems.length} items are` : `${checkoutItems[0].name} is`;
     const val = (id) => document.getElementById(id).value.trim();
 
-    if (PAYMENTS.enabled) {
+    // An order nothing could price must not be handed to Stripe. The server refuses it with a 409
+    // anyway — prices are recomputed there and a manual order has no total to charge — but a
+    // buyer should not meet that as an error after tapping a button reading "Pay".
+    const manual = checkoutShippingSource === "manual";
+
+    if (PAYMENTS.enabled && !manual) {
       startStripeCheckout(document.getElementById("checkout-pay-label"), email, {
         name: val("co-ship-name"),
         address1: val("co-address1"),
@@ -1607,8 +1672,11 @@ function initCheckout() {
 
     completeCheckout(
       document.getElementById("checkout-pay-label"),
-      "Reservation",   // `method` is now only used for the order record, not the headline
-      `${label} on hold. A confirmation will go to ${email} once shipping is arranged.`,
+      manual ? "Quote requested" : "Reservation",   // for the order record, not the headline
+      manual
+        ? `${label} held. We'll email ${email} the shipping cost, usually within a few hours. `
+          + `Nothing has been charged.`
+        : `${label} on hold. A confirmation will go to ${email} once shipping is arranged.`,
       email
     );
   });
@@ -1773,6 +1841,18 @@ function initCart() {
 }
 
 // ---------- my orders (email lookup — no accounts) ----------
+// The database's own words are not the buyer's. "quote_requested" is accurate and unreadable, and
+// it is the status they see most often on a bulky order.
+const ORDER_STATUS_LABEL = {
+  pending: "Reserved — awaiting payment",
+  quote_requested: "Shipping quote in progress",
+  paid: "Paid",
+  fulfilled: "Shipped",
+  cancelled: "Cancelled",
+  refunded: "Refunded",
+  failed: "Payment failed",
+};
+
 function orderRow(order) {
   const date = new Date(order.time * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   const itemsSummary = order.items
@@ -1792,13 +1872,15 @@ function orderRow(order) {
       </div>
       <div class="order-field-row">
         <span class="order-field-label">Status</span>
-        <span class="order-field-value">${order.status}</span>
+        <span class="order-field-value">${ORDER_STATUS_LABEL[order.status] || order.status}</span>
       </div>
       <div class="order-details" hidden>
         <div class="order-field-row order-field-block">
           <p class="order-field-label">Placed</p>
-          <p class="order-field-value">${date} &middot; ${money(order.total)}${
-            order.shipping != null ? ` (incl. ${money(order.shipping)} shipping)` : ""
+          <p class="order-field-value">${date} &middot; ${
+            order.total == null
+              ? `${money(order.subtotal)} + shipping (being quoted)`
+              : money(order.total) + (order.shipping != null ? ` (incl. ${money(order.shipping)} shipping)` : "")
           }</p>
         </div>
         <div class="order-field-row order-field-block">
