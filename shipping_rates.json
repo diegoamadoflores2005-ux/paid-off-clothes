@@ -2288,5 +2288,19 @@
       "9": 144
     },
     "watch_for": "far is two zones further than mid, so expect every figure above the mid column. A 1 lb / 2 lb inversion may well repeat — if it does, it is not an error, and --anomaly records it."
+  },
+  "automation_assessment": {
+    "asked": "Can the remaining Pirate Ship quotes be collected automatically?",
+    "answer": "No — not safely, and not with this setup.",
+    "reasons": [
+      "NO API. Pirate Ship has no public API. That is a deliberate product decision on their end, already documented here, not a credential we are missing.",
+      "BROWSER AUTOMATION NEEDS THE ACCOUNT. Rates are behind a login. This session runs in a headless cloud container with no screen the owner can reach, so 'log in yourself' is not available — it would mean handing over credentials or a session cookie. That is account access, and it is not needed for a shipping table.",
+      "IT WOULD WORK AROUND A PRODUCT DECISION. Scraping a login-walled commercial site to get what they chose not to expose is very likely against their terms, and the account at risk is the one the business ships on.",
+      "THE CALCULATOR SITS INSIDE THE BUY FLOW. Automated clicking on a live account with payment attached can buy a label. The instruction was never to purchase one. No rate table is worth that risk with someone else's money."
+    ],
+    "bulk_upload_checked_and_rejected": "Pirate Ship's spreadsheet upload does accept per-row weight and dimensions, which looked like a way to price 29 rows at once. It is not: the support documentation states individual label prices are not broken out and the total is shown as an AVERAGE. It also is the label-purchase flow. Wrong tool, and adjacent to the one action to avoid.",
+    "what_actually_reduces_the_work": "Quoting fewer bands. An unquoted band is charged the cheapest QUOTED band at or above it, so a skipped band is an overcharge rather than a gap — and the complete mid column prices exactly how big. Six bands per column caps the overcharge at $1.22 and cuts the remaining work from 29 quotes to about 14. The cost lands on the buyer, never on the shop, which is why the size of it is the owner's decision.",
+    "unreachable_band": "The 1 lb band is not reachable by any single-category order in this catalogue, nor by the simple mixes checked: category weights are 7, 10, 32 and 40 oz plus 3 oz packaging, and no combination lands in (15.99, 16.0] oz. The band that took three rounds to settle is one no real order can hit.",
+    "gap_above_9_lb": "Realistic orders reach 19 lb — 19 belts, 13 bags — but core stops at 9 lb and the heavy bands are not in required_cells. Everything from 10 lb up would be charged over_max, the fallback for the heaviest order accepted. That is a real overcharge on a plausible order and wants either a heavy-band quote or a cap on order size."
   }
 }
