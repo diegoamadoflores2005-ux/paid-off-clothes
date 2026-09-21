@@ -392,6 +392,29 @@ from 2 lb up at zone 6 fitted the first three figures exactly, and predicted tha
 $16.51. The 12 × 12 × 11 box works at zone 6 as it does at zone 4, and the weight-based column is
 collectible for mid, far and territories after all.
 
+**Dimensions do not affect the rate below 1 cu ft — and do above it, in ways this table cannot
+express.** `billed_oz()` implements the rule: under 1,728 cu in a parcel bills on actual weight at
+any weight, which is exactly why quoting in a 12 × 12 × 11 test box is legitimate. Above it, and
+**only to zones 5–9 — mid, far and territories, three of the four groups** — it bills on
+`max(actual, volume / 139)`. Above 2 cu ft there is a flat **$21**, and a side over 22 in adds
+**$4.50**; `parcel_surcharge_cents()` covers both. The counter-intuitive part: at exactly 1 cu ft
+the dimensional weight is already **12.4 lb**, so crossing it punishes *light, bulky* parcels
+hardest — a 30 lb parcel can cross it and still bill on actual weight. Every order is safe in a box
+of 1 cu ft or less, whatever it weighs.
+
+**`packaging_problem()` gates go-live on a measured box.** Nothing in `packaging.boxes` counts until
+`verified` is true, meaning someone put a tape measure on it. Without one, every rate silently
+assumes the real parcel stays under 1 cu ft. Both failure modes above are **undercharges**, and an
+undercharge comes out of the shop on every order — the one direction the round-up rule does not
+protect against.
+
+**Multi-package orders are not supported**, and `multi_package.supported` says so rather than the
+gap being silently absent. It breaks at four layers: `shipping_cents(lines)` sums to one weight and
+returns one price, `quote()` returns a single `weight_oz`, the orders table has one `weight_oz`
+column, and `/api/labels.csv` emits one row with one weight per order. Two parcels cost two labels
+and the table would charge for one. Whether it needs building depends on whether the largest real
+box holds the deepest advertised bulk tier — a measurement, not a judgement.
+
 **Box size does not affect weight-based Ground Advantage pricing** — verified, not assumed: 2 lb
 to 90210 returned $6.03 in a 12x19x3 box (0.40 cu ft) and $6.03 in a 12x12x11 box (0.92 cu ft), two
 different Cubic tiers. So the weight-based columns can be quoted in any convenient box and need no

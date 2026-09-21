@@ -287,6 +287,8 @@ class TestZonePricing(unittest.TestCase):
                             "far": {"zones": [7, 8, 9]}},
             "zone_map": {"902": 4, "800": 5, "100": 8},
             "max_quotable_oz": 9 * 16,
+            "packaging": {"boxes": [{"name": "fixture", "dims_in": [12, 12, 11],
+                                     "cu_in": 1584, "verified": True}]},
             "rate_table": {
                 "core": {b: {"near": 5 + i, "mid": 6 + i, "far": 7 + i}
                          for i, b in enumerate(bands)},
@@ -749,6 +751,8 @@ class TestTheSwitchOn(unittest.TestCase):
                             "far": {"zones": [7, 8, 9]}},
             "zone_map": {"902": 4, "800": 5, "100": 8},
             "max_quotable_oz": 9 * 16,
+            "packaging": {"boxes": [{"name": "fixture", "dims_in": [12, 12, 11],
+                                     "cu_in": 1584, "verified": True}]},
             "rate_table": {
                 "core": {b: {"near": 5.0 + i, "mid": 6.0 + i, "far": 7.0 + i}
                          for i, b in enumerate(bands)},
@@ -877,6 +881,74 @@ class TestTheBandPlanAndCeiling(unittest.TestCase):
         probe = json.loads(json.dumps(rates))
         probe.pop("max_quotable_oz", None)
         self.assertFalse(orders.zone_pricing_ready(probe))
+
+
+class TestPackagingAndDimensions(unittest.TestCase):
+    """Dimensions do not affect the rate below 1 cu ft — which is why a test box is legitimate —
+    and above it they do, in ways a weight-indexed table cannot express."""
+
+    def setUp(self):
+        self.orders = load_orders()
+
+    def test_below_one_cubic_foot_dimensions_do_not_matter(self):
+        """The fact that makes quoting in a 12x12x11 test box sound."""
+        for cu_in in (100, 684, 1584, 1728):
+            with self.subTest(cu_in=cu_in):
+                self.assertEqual(self.orders.billed_oz(142, cu_in, 6), 142.0)
+
+    def test_above_one_cubic_foot_a_light_parcel_bills_on_volume(self):
+        """Counter-intuitive and the reason this matters: at 1 cu ft the dim weight is already
+        12.4 lb, so crossing it punishes LIGHT bulky parcels hardest."""
+        self.assertGreater(self.orders.billed_oz(142, 2000, 6), 142.0)
+        self.assertAlmostEqual(self.orders.billed_oz(142, 2000, 6), 2000 / 139 * 16, places=3)
+
+    def test_a_heavy_parcel_can_cross_one_cubic_foot_and_still_bill_on_weight(self):
+        self.assertEqual(self.orders.billed_oz(483, 3400, 6), 483.0)
+
+    def test_dimensional_weight_applies_only_to_zones_five_and_up(self):
+        """near is zones 1-4, so a bulky parcel there is billed on actual weight."""
+        self.assertEqual(self.orders.billed_oz(142, 2000, 4), 142.0)
+        self.assertGreater(self.orders.billed_oz(142, 2000, 5), 142.0)
+        self.assertGreater(self.orders.billed_oz(142, 2000, 9), 142.0)
+
+    def test_the_box_surcharges_are_charged_on_the_box_not_the_weight(self):
+        self.assertEqual(self.orders.parcel_surcharge_cents(3000, 20), 0)
+        self.assertEqual(self.orders.parcel_surcharge_cents(4000, 20), 2100)
+        self.assertEqual(self.orders.parcel_surcharge_cents(3000, 24), 450)
+        self.assertEqual(self.orders.parcel_surcharge_cents(4000, 24), 2550)
+
+    def test_no_measured_box_blocks_zone_pricing(self):
+        """Unmeasured packaging is an undercharge waiting to happen, so it gates go-live."""
+        self.assertIsNotNone(self.orders.packaging_problem())
+        self.assertFalse(self.orders.zone_pricing_ready())
+
+    def test_a_measured_box_under_a_cubic_foot_clears_the_gate(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "test", "dims_in": [12, 12, 11], "cu_in": 1584, "verified": True}]
+        self.assertIsNone(self.orders.packaging_problem(rates))
+
+    def test_an_oversize_measured_box_is_reported(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "big", "dims_in": [20, 16, 12], "cu_in": 3840, "verified": True}]
+        self.assertIn("$21", self.orders.packaging_problem(rates))
+
+    def test_a_long_measured_box_is_reported(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "long", "dims_in": [24, 8, 6], "cu_in": 1152, "verified": True}]
+        self.assertIn("$4.50", self.orders.packaging_problem(rates))
+
+    def test_an_unverified_box_does_not_count(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "guessed", "dims_in": [12, 12, 11], "cu_in": 1584, "verified": False}]
+        self.assertIsNotNone(self.orders.packaging_problem(rates))
+
+    def test_multi_package_is_declared_unsupported(self):
+        """Recorded rather than silently absent: two parcels cost two labels."""
+        self.assertFalse(self.orders.load_rates()["multi_package"]["supported"])
 
 
 class TestRatesAreNotServed(unittest.TestCase):

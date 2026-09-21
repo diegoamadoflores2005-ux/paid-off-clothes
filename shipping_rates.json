@@ -2335,5 +2335,48 @@
     "why_heavy_bands_are_now_REQUIRED": "They used to be excluded because 'the fallback covers them'. That was backwards. Above the top band there was one flat price, so any parcel heavier than the weight it was quoted for ships BELOW cost — and unlike an overcharge, an undercharge comes out of the shop, on every such order, silently. The catalogue's own advertised bulk tiers reach 30.2 lb (12 pairs of shoes), 24.2 lb (12 bags) and 11.4 lb (20 shorts). Those are orders the site quotes a price for, so the table has to be able to price shipping them.",
     "why_a_ceiling": "31 lb clears the deepest advertised tier. Above it the table returns nothing rather than guessing. It has to stop somewhere: the heaviest basket this catalogue can assemble is 84.6 lb, and USPS Ground Advantage stops at 70 lb, so the heaviest orders cannot ship as one parcel at any price.",
     "residual_risk_dimensions": "NOT closed by this plan. A 30 lb order will not fit the 12x12x11 quoting box. The real parcel is bigger, and past 1728 cu in dimensional weight applies to zones 5-9 — mid, far and territories, three groups of four — while past 2 cu ft there is a $21 fee. A table indexed on weight alone cannot express either. The heavy bands are therefore a FLOOR on cost, not a guarantee. Closing it needs the real boxes measured, or heavy orders handled by a person."
+  },
+  "packaging": {
+    "_what": "What the shop actually ships in. NOTHING here is filled from a guess. A box counts only when `verified` is true, meaning someone put a tape measure on it.",
+    "why_it_matters": "Rates are collected in a 12x12x11 test box, and that is sound: weight-based Ground Advantage ignores dimensions below 1 cu ft, verified here by quoting one weight in two boxes of different volumes and getting the same price. What it does not cover is the parcel the shop really ships. Above 1 cu ft the order bills on max(actual weight, volume / 139) to zones 5-9 — mid, far and territories, three groups of four — and above 2 cu ft there is a flat $21. Both are undercharges the table cannot see, and an undercharge comes out of the shop on every order.",
+    "the_rule": {
+      "under_1_cu_ft": "dimensions do not affect the price at all, at any weight",
+      "over_1_cu_ft": "bills on max(actual, volume/139), zones 5-9 only",
+      "over_2_cu_ft": "+$21.00",
+      "side_over_22_in": "+$4.50",
+      "consequence": "At exactly 1 cu ft the dimensional weight is already 12.4 lb, so crossing it punishes LIGHT bulky parcels hardest. An order under 12.4 lb is safe only up to 1 cu ft; one over 12.4 lb has headroom to the 2 cu ft fee wall. Every order is safe in a box of 1 cu ft or less, whatever it weighs."
+    },
+    "boxes": [],
+    "to_measure": [
+      {
+        "what": "The LARGEST box or mailer currently used for orders",
+        "need": "inside length, width and depth in inches",
+        "why": "One number decides the whole question. At or under 1 cu ft (1728 cu in) and 22 in a side, every rate in the table is exactly right and none of the 26 outstanding quotes needs different dimensions.",
+        "priority": 1
+      },
+      {
+        "what": "The smallest mailer used, for single-item orders",
+        "need": "inside length, width and depth in inches",
+        "why": "Confirms the sub-1-lb and 2 lb bands are not being quoted against a box the shop would never use. Lower stakes: a small box cannot trigger any of the thresholds.",
+        "priority": 2
+      },
+      {
+        "what": "Volume of one unit as packed, per category — shirts, belts, shorts, bags, shoes",
+        "need": "the packed dimensions of a single unit, or simply how many fit in the largest box",
+        "why": "Determines which orders need a bigger box or a second parcel. Cannot be derived: it depends on whether shoes ship in their own boxes and how tightly tees fold.",
+        "priority": 3
+      }
+    ]
+  },
+  "multi_package": {
+    "supported": false,
+    "where_it_breaks": [
+      "shipping_cents(lines) sums every line to ONE weight and returns ONE price.",
+      "quote() returns a single weight_oz and a single shipping_cents.",
+      "the orders table stores one weight_oz column per order.",
+      "/api/labels.csv emits one row, with one Weight (oz), per order."
+    ],
+    "consequence": "An order too large for one box cannot be priced correctly today. It is not a rounding error: two parcels cost two labels, and the table would charge for one. Whether this needs building depends entirely on the priority-1 and priority-3 measurements — if the largest box holds the deepest advertised bulk tier, it never arises.",
+    "if_it_is_needed": "A parcel model at all four layers above, a packing rule deciding how an order splits, and N x band-rate pricing. Substantial, and not worth starting before the measurements say whether it is required."
   }
 }

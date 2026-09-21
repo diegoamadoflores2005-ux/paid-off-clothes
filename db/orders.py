@@ -661,6 +661,80 @@ def required_cells(rates=None):
     return cells
 
 
+# USPS dimensional-weight and surcharge thresholds. From the Pirate Ship rate sheet ("Packages
+# exceeding 1 cubic foot are charged the dimensional weight (L x W x H / 139) if greater than the
+# actual weight") and their nonstandard-fee schedule. Not estimates.
+DIM_WEIGHT_OVER_CU_IN = 1728      # 1.0 cu ft; below this, dimensions do not affect price at all
+DIM_DIVISOR = 139                 # cu in per pound, since 12 July 2026
+DIM_WEIGHT_ZONES = range(5, 10)   # applies to zones 5-9 only — mid, far and territories
+OVERSIZE_OVER_CU_IN = 3456        # 2.0 cu ft
+OVERSIZE_FEE_CENTS = 2100
+LONG_SIDE_OVER_IN = 22
+LONG_SIDE_FEE_CENTS = 450
+
+
+def billed_oz(actual_oz, cu_in, zone):
+    """What USPS bills a parcel on, which is not always what it weighs.
+
+    Below 1 cu ft, dimensions are irrelevant — which is why quoting in a 12x12x11 test box gives a
+    correct rate for any weight. Above it, and only to zones 5-9, the parcel bills on the greater
+    of its actual weight and its volume divided by 139. The effect is counter-intuitive: crossing
+    1 cu ft punishes LIGHT, bulky parcels hardest, because at exactly 1 cu ft the dimensional
+    weight is already 12.4 lb. A 30 lb parcel can cross it and still bill on actual weight.
+    """
+    actual = float(actual_oz)
+    if cu_in is None or float(cu_in) <= DIM_WEIGHT_OVER_CU_IN:
+        return actual
+    if zone is None or int(zone) not in DIM_WEIGHT_ZONES:
+        return actual
+    return max(actual, float(cu_in) / DIM_DIVISOR * 16.0)
+
+
+def parcel_surcharge_cents(cu_in, longest_in):
+    """Fees the weight table cannot express, because they are charged on the box, not the weight."""
+    fee = 0
+    if cu_in is not None and float(cu_in) > OVERSIZE_OVER_CU_IN:
+        fee += OVERSIZE_FEE_CENTS
+    if longest_in is not None and float(longest_in) > LONG_SIDE_OVER_IN:
+        fee += LONG_SIDE_FEE_CENTS
+    return fee
+
+
+def packaging_problem(rates=None):
+    """Why this table's packaging cannot yet back its rates, or None.
+
+    The rates are collected in a test box, which is sound because weight-based pricing ignores
+    dimensions below 1 cu ft. What that does NOT cover is the parcel the shop really ships: if it
+    exceeds 1 cu ft the order bills on dimensional weight to three of the four zone groups, and past
+    2 cu ft there is a flat $21 the table knows nothing about. Both are undercharges, and an
+    undercharge comes out of the shop.
+    """
+    rates = load_rates() if rates is None else rates
+    pack = rates.get("packaging") or {}
+    boxes = [b for b in (pack.get("boxes") or []) if b.get("verified")]
+    if not boxes:
+        return ("no measured box on file — every rate assumes the real parcel stays under 1 cu ft, "
+                "and nothing has confirmed that")
+    ceiling = max_quotable_oz(rates)
+    if ceiling is None:
+        return None
+    biggest = max(float(b["cu_in"]) for b in boxes)
+    longest = max(float(max(b["dims_in"])) for b in boxes)
+    if longest > LONG_SIDE_OVER_IN:
+        return (f"the largest measured box has a {longest:g} in side, over the {LONG_SIDE_OVER_IN} "
+                f"in limit, so every parcel in it carries a $4.50 fee the table does not charge")
+    if biggest > OVERSIZE_OVER_CU_IN:
+        return (f"the largest measured box is {biggest:.0f} cu in, over 2 cu ft, so every parcel in "
+                f"it carries a $21 fee the table does not charge")
+    if biggest > DIM_WEIGHT_OVER_CU_IN:
+        dim = biggest / DIM_DIVISOR * 16.0
+        if dim > ceiling:
+            return (f"the largest measured box is {biggest:.0f} cu in, which bills as "
+                    f"{dim/16:.1f} lb to zones 5-9 — above the {ceiling/16:.0f} lb ceiling, so a "
+                    f"light order in that box would be charged less than its label costs")
+    return None
+
+
 def max_quotable_oz(rates=None):
     """The heaviest parcel this table may price. None means no ceiling has been set."""
     rates = load_rates() if rates is None else rates
@@ -890,6 +964,8 @@ def zone_pricing_ready(rates=None):
     if any(v is None for _key, v in required_cells(rates)):
         return False
     if rate_table_problems(rates) or package_problem(rates):
+        return False
+    if packaging_problem(rates):
         return False
     if max_quotable_oz(rates) is None:
         # Without a ceiling there is no weight at which the table stops guessing, and the failure
