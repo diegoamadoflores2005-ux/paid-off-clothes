@@ -1305,6 +1305,30 @@
         "$6.03 also completed the near ladder's proof: it ruled $6.33 out of every band below",
         "3 lb, which pinned the last unverified cell in the column."
       ]
+    },
+    {
+      "cell": "1 lb / mid (zone 6)",
+      "quotes": [
+        "$9.24 at 1 lb (2026-09-21, 35401, 12x12x11)",
+        "$8.17 at 2 lb, same session — a HEAVIER parcel priced lower"
+      ],
+      "status": "OPEN — $9.24 identified as the outlier; nothing recorded",
+      "why_it_matters": [
+        "Postage cannot fall as weight rises on one service, so one of the two is wrong.",
+        "Two independent tests both point at the 1 lb figure, not the 2 lb one:",
+        "  1. DISCOUNT. Both verified sub-1-lb cells sit ~22% below the advertised rate",
+        "     ($5.83 vs $7.46 at zone 4, $6.07 vs $7.86 at zone 6). $9.24 against an advertised",
+        "     $9.63 is 4% off — barely a discount, which is the shape of a retail line.",
+        "  2. CROSS-ZONE SCALING. The advertised sheet puts 1 lb zone 6 at 1.182x zone 4. The",
+        "     account's 1 lb zone 4 is unquoted but bounded between $5.83 and $6.03 by its",
+        "     neighbours, so 1 lb zone 6 should land near $6.89-$7.13. $9.24 is far above.",
+        "     The same scaling puts 2 lb zone 6 near $7.13 against a reported $8.17 — high, but",
+        "     the right order of magnitude.",
+        "Dropping the 1 lb row leaves a clean rising ladder: $6.07 -> $8.17."
+      ],
+      "nothing_recorded": "All three rows are held, not just the bad one. The 16 September session is the precedent: it produced two wrong figures and only one was noticed at the time. A session that produced one bad quote is suspect as a whole until the bad one is explained.",
+      "to_resolve": "Re-quote 1 lb and 2 lb back to back to 35401 in the same box, recording every service line and its price for each, and confirming the weight field reads what was typed.",
+      "prevention": "record_quote.py now checks each quote against the published advertised rate for its band and zone. It refuses a price at or above advertised — impossible for a below-Commercial account — and one less than 10% below it. That catches this on its own row, without needing a neighbouring band to contradict it."
     }
   ],
   "zone_map_source": {
@@ -1868,5 +1892,37 @@
     "significance": "The first independent check of the imported chart. Until now the zone map rested entirely on the PDF extraction; Pirate Ship computing the same zone from its own data confirms that import against an outside source.",
     "what_actually_went_wrong": "A recommendation error, not a data error. The worklist printed 354, 355 and 356 as zone 6 prefixes and a city name was substituted for one of them — Birmingham, which is 352 and zone 7. Birmingham and Tuscaloosa are an hour apart and fall either side of the mid/far line.",
     "prevention": "tools/record_quote.py --check <ZIP> now answers 'is this the right destination' before any quoting happens, and --next prints prefixes with an explicit warning not to substitute a city."
+  },
+  "advertised_reference": {
+    "_what": "Pirate Ship's PUBLISHED Ground Advantage weight-based rates by zone. These are advertised prices, NOT this account's. They may never fill a cell — they exist only as a ceiling and a sanity check.",
+    "source": "PirateShip-August-22-2026-USPS-Rates.xlsx, sheet 'Ground Advantage Weight-Based'",
+    "effective": "2026-08-22",
+    "coverage": "Only the sub-1-lb and 1 lb rows are printed in our weight range; 2-20 lb is redacted because they may not advertise below-Commercial pricing. 21 lb and up is printed but far above anything this shop ships.",
+    "rates_by_zone": {
+      "sub": {
+        "1": 6.93,
+        "2": 6.94,
+        "3": 7.3,
+        "4": 7.46,
+        "5": 7.69,
+        "6": 7.86,
+        "7": 8.07,
+        "8": 8.4,
+        "9": 8.4
+      },
+      "1": {
+        "1": 7.61,
+        "2": 7.68,
+        "3": 8.0,
+        "4": 8.15,
+        "5": 8.74,
+        "6": 9.63,
+        "7": 9.98,
+        "8": 10.67,
+        "9": 10.67
+      }
+    },
+    "observed_account_discount": "~22% off advertised, from the two verified sub-1-lb cells: $5.83 vs $7.46 at zone 4 (21.8%), $6.07 vs $7.86 at zone 6 (22.8%). A quote only a few percent below advertised is very likely a retail line rather than this account's.",
+    "note": "Zone 8 and zone 9 are identical in both printed rows."
   }
 }

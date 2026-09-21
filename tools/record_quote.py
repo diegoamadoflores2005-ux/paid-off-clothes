@@ -33,6 +33,10 @@ RATES = os.path.join(APP_DIR, "shipping_rates.json")
 NONSTANDARD_LENGTH_IN = 22       # $4.50 over this
 OVERSIZE_VOLUME_CU_FT = 2.0      # $21.00 over this
 DIM_WEIGHT_CU_IN = 1728          # dim weight above this, and only to zones 5-9
+# Both verified sub-1-lb cells sit ~22% below advertised. 10% is deliberately loose: it passes any
+# genuine commercial rate while catching a retail line, which is what the gap looks like in practice.
+MIN_PLAUSIBLE_DISCOUNT = 0.10
+
 CUBIC_MAX_CU_FT = 1.0
 CUBIC_MAX_SIDE_IN = 22
 
@@ -158,6 +162,29 @@ def check(args, rates, orders):
             problems.append(f"{cell} already holds ${existing:.2f}, and this quote says "
                             f"${chosen['price_usd']:.2f}. One of them is wrong; recording would "
                             f"bury the question. Re-quote both weights in one sitting.")
+
+    # Against the published advertised rate, where one exists for this band and zone.
+    #
+    # This account runs well below Commercial Pricing — both verified sub-1-lb cells sit about 22%
+    # under the advertised figure. A quote AT or ABOVE advertised is impossible for it, and one only
+    # a few percent below is far more likely to be a retail line than a real rate. That is the shape
+    # the 1 lb zone 6 quote made: $9.24 against $9.63 advertised, a 4% discount where everything
+    # else shows 22%.
+    adv = ((rates.get("advertised_reference") or {}).get("rates_by_zone") or {})
+    ceiling = (adv.get(band) or {}).get(str(zone))
+    if ceiling:
+        off = 1.0 - chosen["price_usd"] / ceiling
+        if off <= 0:
+            problems.append(
+                f"${chosen['price_usd']:.2f} is at or above the ADVERTISED rate of ${ceiling:.2f} "
+                f"for {band} lb to zone {zone}. This account prices below Commercial, so it cannot "
+                f"pay more than the advertised figure — that is a retail or wrong-service line.")
+        elif off < MIN_PLAUSIBLE_DISCOUNT:
+            problems.append(
+                f"${chosen['price_usd']:.2f} is only {off * 100:.1f}% below the advertised "
+                f"${ceiling:.2f}, where every verified cell sits about 22% below. That usually "
+                f"means a retail line was read instead of the commercial one. If this really is "
+                f"the price, say so and the threshold in record_quote.py can be revisited.")
 
     # A quote that lands exactly on another band's price, to the cent, is far more likely to be
     # that band than a coincidence. This is the shape the 12x12x11 control test made: entered as

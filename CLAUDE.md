@@ -427,6 +427,15 @@ its dearest tier while staying under the 1728 cu in dimensional-weight threshold
 length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
 revealing it.
 
+**Quotes are checked against the published advertised rate.** `advertised_reference` in
+`shipping_rates.json` holds Pirate Ship's public sub-1-lb and 1 lb rates for all nine zones — the
+only rows not redacted in our weight range. They may **never** fill a cell; they are a ceiling. Both
+verified sub-1-lb cells sit ~22% below advertised, so `record_quote.py` refuses a price at or above
+advertised (impossible for a below-Commercial account) and one less than `MIN_PLAUSIBLE_DISCOUNT`
+(10%) below it. That caught a $9.24 quote at 1 lb zone 6 against $9.63 advertised — a 4% discount,
+the shape of a retail line — **on its own row**, where the monotonicity check needed a neighbouring
+band to contradict it and only fired after a whole session had been quoted.
+
 **The published Pirate Ship rate spreadsheet is not a source of rates.** Everything above 1 lb reads
 "Less than …" rather than a number, because they may not advertise below-Commercial pricing, and the
 whole Cubic sheet is redacted the same way. What it does print are advertised rates, not this

@@ -853,7 +853,8 @@ class TestQuoteValidator(unittest.TestCase):
         self.orders = load_orders()
 
     def _rates(self):
-        bands = ["sub"] + [str(b) for b in range(2, 10)]
+        # Includes the 1 lb band, as the real table does — 16.0 oz has its own row.
+        bands = ["sub", "1"] + [str(b) for b in range(2, 10)]
         return {
             "origin_zip": "85641", "carrier": "USPS", "service": "Ground Advantage",
             "rate_basis": "weight",
@@ -866,6 +867,10 @@ class TestQuoteValidator(unittest.TestCase):
                 "heavy": {}, "over_max": {"near": None, "mid": None, "far": None},
             },
             "cell_provenance": {},
+            "advertised_reference": {"rates_by_zone": {
+                "sub": {"4": 7.46, "6": 7.86},
+                "1": {"4": 8.15, "6": 9.63},
+            }},
         }
 
     def _check(self, rates, **kw):
@@ -1000,6 +1005,43 @@ class TestQuoteValidator(unittest.TestCase):
         self.assertEqual(verdicts[0], [], "the 2 lb row is fine on its own")
         self.assertTrue(any("break the ladder" in p for p in verdicts[1]),
                         "the 3 lb row must fail against the 2 lb row staged before it")
+
+    # ---- against the published advertised rate ---------------------------------------------------
+    def test_a_quote_at_or_above_the_advertised_rate_is_refused(self):
+        """This account prices below Commercial, so it cannot pay more than the advertised figure."""
+        problems, _n, _c, _k = self._check(
+            self._rates(), oz=8, line=["USPS/Ground Advantage/8.00"])
+        self.assertTrue(any("at or above the ADVERTISED" in p for p in problems))
+
+    def test_a_suspiciously_small_discount_is_refused(self):
+        """The exact shape the 1 lb zone 6 quote made: $9.24 against $9.63 advertised.
+
+        Every verified cell sits about 22% below advertised. Four percent is a retail line. This
+        catches it on its own row, without needing a neighbouring band to contradict it — which is
+        what the monotonicity check needed, and only after a whole session had been quoted.
+        """
+        rates = self._rates()
+        rates["zone_map"]["354"] = 6
+        problems, _n, _c, _k = self._check(
+            rates, dest="35401", oz=16, line=["USPS/Ground Advantage/9.24"])
+        self.assertTrue(any("below the advertised" in p for p in problems),
+                        f"expected a discount-plausibility refusal, got {problems}")
+
+    def test_a_genuine_commercial_rate_passes(self):
+        """No false positives on the figures already verified."""
+        for dest, oz, price in (("90210", 8, 5.83), ("35401", 8, 6.07)):
+            rates = self._rates()
+            rates["zone_map"]["354"] = 6
+            with self.subTest(dest=dest):
+                problems, _n, _c, _k = self._check(rates, dest=dest, oz=oz,
+                                                   line=[f"USPS/Ground Advantage/{price}"])
+                self.assertEqual(problems, [], f"${price:.2f} is a verified rate and must pass")
+
+    def test_a_band_with_no_advertised_reference_is_not_blocked(self):
+        """2-20 lb is redacted in the published sheet, so most bands have no ceiling to check."""
+        rates = self._rates()
+        problems, _n, _c, _k = self._check(rates, oz=64, line=["USPS/Ground Advantage/6.90"])
+        self.assertEqual(problems, [], "a band with no reference must not be refused for that")
 
     # ---- the destination check -------------------------------------------------------------------
     def test_check_accepts_a_group_worst_case_zip(self):
