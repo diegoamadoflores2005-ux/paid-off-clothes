@@ -1,4 +1,4 @@
-# far column — zone 8, the dearest in that group, so one price covers zones 7 and 8.
+# mid column — the three heavy bands still missing.
 # Nine bands under the agreed plan. Weight field AND price visible in every screenshot.
 #
 #   python3 tools/record_quote.py --session far.txt
@@ -6,15 +6,9 @@
 #
 # If 1 lb-style inversions appear, that is not an error — see --anomaly in the docs.
 
-dest 10001
+dest 35401
 box 12x12x11
 
-8    USPS/Ground Advantage/?
-32   USPS/Ground Advantage/?
-48   USPS/Ground Advantage/?
-80   USPS/Ground Advantage/?
-96   USPS/Ground Advantage/?
-144  USPS/Ground Advantage/?
 208  USPS/Ground Advantage/?
 320  USPS/Ground Advantage/?
 496  USPS/Ground Advantage/?

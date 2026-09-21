@@ -286,6 +286,7 @@ class TestZonePricing(unittest.TestCase):
                             "mid": {"zones": [5, 6]},
                             "far": {"zones": [7, 8, 9]}},
             "zone_map": {"902": 4, "800": 5, "100": 8},
+            "max_quotable_oz": 9 * 16,
             "rate_table": {
                 "core": {b: {"near": 5 + i, "mid": 6 + i, "far": 7 + i}
                          for i, b in enumerate(bands)},
@@ -543,10 +544,17 @@ class TestZonePricing(unittest.TestCase):
         self.assertEqual(orders.band_for_oz(49), "4", "one ounce over 3 lb is already a 4 lb parcel")
         self.assertEqual(orders.band_for_oz(64), "4", "exactly 4 lb stays in the 4 lb band")
 
-    def test_above_the_top_band_uses_the_fallback_for_that_group(self):
+    def test_above_the_ceiling_the_table_refuses_to_price(self):
+        """It used to fall to over_max — one flat price for everything heavier than the table.
+
+        That is an UNDERcharge waiting to happen: a parcel heavier than the weight that price was
+        quoted for ships below cost, and undercharges come out of the shop silently. Above the
+        ceiling the table now says nothing and the order falls back to the estimate.
+        """
         orders = self._with_rates(self._full_table())
-        self.assertEqual(orders.zone_shipping_cents(400, "90210"), 3000)
-        self.assertEqual(orders.zone_shipping_cents(400, "10001"), 3600)
+        self.assertEqual(orders.max_quotable_oz(), 144)
+        self.assertIsNone(orders.zone_shipping_cents(400, "90210"))
+        self.assertIsNotNone(orders.zone_shipping_cents(143, "90210"), "under the ceiling still prices")
 
     def test_no_zip_means_the_flat_ladder(self):
         """Every cart. There is no address at that point, so there is no zone to price by."""
@@ -569,11 +577,12 @@ class TestZonePricing(unittest.TestCase):
         rates["cell_provenance"] = self._provenance_for(rates)
         orders = self._with_rates(rates)
 
+        rates["max_quotable_oz"] = 20 * 16
+        orders = self._with_rates(rates)
         ten_lb = orders.zone_shipping_cents(160, "90210")
         eleven_lb = orders.zone_shipping_cents(176, "90210")
         self.assertEqual(ten_lb, 2000, "10 lb must pay the next band quoted above it, the 11 lb one")
         self.assertEqual(ten_lb, eleven_lb)
-        self.assertLess(ten_lb, 3000, "10 lb must not pay the over-max fallback")
 
     def test_exactly_one_pound_is_not_charged_the_over_max_fallback(self):
         """16.0 oz rounds to the 1 lb band, which no table has. It must fall up to 2 lb."""
@@ -739,6 +748,7 @@ class TestTheSwitchOn(unittest.TestCase):
             "zone_groups": {"near": {"zones": [1, 2, 3, 4]}, "mid": {"zones": [5, 6]},
                             "far": {"zones": [7, 8, 9]}},
             "zone_map": {"902": 4, "800": 5, "100": 8},
+            "max_quotable_oz": 9 * 16,
             "rate_table": {
                 "core": {b: {"near": 5.0 + i, "mid": 6.0 + i, "far": 7.0 + i}
                          for i, b in enumerate(bands)},
@@ -809,6 +819,64 @@ class TestTheSwitchOn(unittest.TestCase):
         self.assertEqual(orders.shipping_cents(lines, "90210"),
                          orders.shipping_cents(lines, None),
                          "one unverified cell must keep every order on the flat ladder")
+
+
+class TestTheBandPlanAndCeiling(unittest.TestCase):
+    """The reduced band plan, and the undercharge it had to close first.
+
+    Heavy bands used to be excluded from required_cells on the grounds that over_max covered them.
+    That was backwards: above the top band there was one flat price, so a parcel heavier than the
+    weight it was quoted for shipped BELOW cost. An overcharge lands on the buyer and is visible;
+    an undercharge comes out of the shop on every such order and nothing says so.
+    """
+
+    def test_heavy_bands_are_required(self):
+        orders = load_orders()
+        want = set(orders.required_bands())
+        for band in ("13", "20", "31"):
+            with self.subTest(band=band):
+                self.assertIn(band, want)
+
+    def test_the_plan_covers_the_deepest_advertised_bulk_tier(self):
+        """Shipping has to be quotable for every order the site quotes a PRICE for."""
+        import json as _json
+        orders = load_orders()
+        pricing = _json.load(open(os.path.join(APP_DIR, "pricing.json"), encoding="utf-8"))
+        weights = {"Shirts": 7, "Belts": 10, "Shoes": 40, "Bags": 32, "Shorts": 9, "Tracksuits": 28}
+        ceiling = orders.max_quotable_oz()
+        self.assertIsNotNone(ceiling, "a table with no ceiling guesses above its top band")
+        for cat, spec in (pricing.get("categories") or {}).items():
+            tiers = [t.get("minQty") for t in (spec.get("tiers") or []) if t.get("minQty")]
+            if not tiers or cat not in weights:
+                continue
+            heaviest = max(tiers) * weights[cat] + 3
+            with self.subTest(category=cat, units=max(tiers)):
+                self.assertLessEqual(heaviest, ceiling,
+                                     f"{max(tiers)} {cat} is {heaviest/16:.1f} lb, above the "
+                                     f"{ceiling/16:.0f} lb ceiling — the site advertises a price "
+                                     f"for an order it cannot quote shipping on")
+
+    def test_the_one_lb_band_is_not_required(self):
+        """No basket this catalogue can assemble lands in (15.99, 16.0] oz."""
+        orders = load_orders()
+        self.assertNotIn("1", orders.required_bands())
+
+    def test_the_overcharge_report_is_per_group(self):
+        """It is a fact about each column's own numbers, not a constant, so it is recomputed."""
+        orders = load_orders()
+        report = orders.overcharge_report()
+        self.assertIn("mid", report)
+        self.assertGreater(report["mid"]["worst_overcharge_usd"], 0,
+                           "mid is complete enough to price its own skipped bands")
+        self.assertEqual(report["far"]["worst_overcharge_usd"], 0.0,
+                         "far has no cells yet, so nothing to measure")
+
+    def test_a_table_without_a_ceiling_cannot_switch_on(self):
+        orders = load_orders()
+        rates = orders.load_rates()
+        probe = json.loads(json.dumps(rates))
+        probe.pop("max_quotable_oz", None)
+        self.assertFalse(orders.zone_pricing_ready(probe))
 
 
 class TestRatesAreNotServed(unittest.TestCase):

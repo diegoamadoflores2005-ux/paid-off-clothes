@@ -624,22 +624,79 @@ def group_for_zone(zone, rates=None):
     return None
 
 
-def required_cells(rates=None):
-    """Every cell that must hold a price before zone pricing may switch on.
+def required_bands(rates=None):
+    """Which bands must be quoted. Data-driven, because the right set is a business trade-off.
 
-    'heavy' is excluded: those bands only occur for bulk shoes and bags, and the fallback covers
-    them. The core ladder and the fallback are what every ordinary order needs.
+    A band that is skipped is not a gap — zone_rate_cents charges the cheapest band at or ABOVE it,
+    so the buyer pays a little more and the shop is never out of pocket. How much more is
+    measurable per group once a column is filled; see overcharge_report(). Quoting every pound is
+    the most accurate and the most work, and the owner picks the balance.
+
+    Heavy bands are required here, unlike before. They used to be excluded on the grounds that the
+    over_max fallback covered them — which is exactly backwards. Above the top band there is ONE
+    flat price, so a heavier order than that price was quoted for ships BELOW cost, and undercharges
+    come out of the shop silently. The catalogue's own advertised bulk tiers reach 30 lb.
+    """
+    rates = load_rates() if rates is None else rates
+    declared = rates.get("required_bands")
+    if declared:
+        return [str(b) for b in declared]
+    table = rates.get("rate_table") or {}
+    return [b for _lb, _sec, b in table_bands(table)]
+
+
+def required_cells(rates=None):
+    """Every cell that must hold a price before zone pricing may switch on."""
+    rates = load_rates() if rates is None else rates
+    table = rates.get("rate_table") or {}
+    groups = group_names(rates)
+    want = set(required_bands(rates))
+    cells = []
+    for section in ("core", "heavy"):
+        for band, row in (table.get(section) or {}).items():
+            if band not in want:
+                continue
+            for g in groups:
+                cells.append(((section, band, g), (row or {}).get(g)))
+    return cells
+
+
+def max_quotable_oz(rates=None):
+    """The heaviest parcel this table may price. None means no ceiling has been set."""
+    rates = load_rates() if rates is None else rates
+    v = rates.get("max_quotable_oz")
+    return None if v is None else float(v)
+
+
+def overcharge_report(rates=None):
+    """Per group, the worst a buyer can be overcharged by a band nobody quoted.
+
+    Computed from the column itself, so it is a fact about the data rather than an estimate, and it
+    has to be recomputed as each column fills — it is not a constant across groups.
     """
     rates = load_rates() if rates is None else rates
     table = rates.get("rate_table") or {}
-    cells = []
-    groups = group_names(rates)
-    for band, row in (table.get("core") or {}).items():
-        for g in groups:
-            cells.append((("core", band, g), (row or {}).get(g)))
-    for g in groups:
-        cells.append((("over_max", "over", g), (table.get("over_max") or {}).get(g)))
-    return cells
+    bands = table_bands(table)
+    want = set(required_bands(rates))
+    out = {}
+    for group in group_names(rates):
+        worst, where = 0.0, None
+        for i, (_lb, sec, band) in enumerate(bands):
+            if band in want:
+                continue
+            exact = ((table.get(sec) or {}).get(band) or {}).get(group)
+            if exact is None:
+                continue
+            above = [((table.get(s2) or {}).get(b2) or {}).get(group)
+                     for _l2, s2, b2 in bands[i:] if b2 in want]
+            above = [float(x) for x in above if x is not None]
+            if not above:
+                continue
+            over = min(above) - float(exact)
+            if over > worst:
+                worst, where = over, band
+        out[group] = {"worst_overcharge_usd": round(worst, 2), "at_band": where}
+    return out
 
 
 # The group list is DERIVED from zone_groups, never hardcoded. Hardcoding a set of names in four
@@ -834,6 +891,10 @@ def zone_pricing_ready(rates=None):
         return False
     if rate_table_problems(rates) or package_problem(rates):
         return False
+    if max_quotable_oz(rates) is None:
+        # Without a ceiling there is no weight at which the table stops guessing, and the failure
+        # mode above the top band is an undercharge the shop absorbs.
+        return False
     return not unverified_cells(rates)
 
 
@@ -872,6 +933,10 @@ def zone_rate_cents(oz, group, table):
     """
     want_lb = 0 if band_for_oz(oz) == "sub" else int(band_for_oz(oz))
     best = None
+    # Above the ceiling the table says nothing rather than guessing. The old over_max fallback was
+    # one flat price for everything heavier than the table, which means a parcel heavier than the
+    # weight that price was quoted for ships BELOW cost — and undercharges come out of the shop,
+    # every time, silently. Returning None falls back to the estimate, and the caller can refuse.
     for lb, section, key in table_bands(table):
         if lb < want_lb:
             continue
@@ -888,6 +953,9 @@ def zone_shipping_cents(oz, dest_zip, rates=None):
     """Zone-priced postage in cents, or None if this order cannot be priced that way."""
     rates = load_rates() if rates is None else rates
     if not zone_pricing_ready(rates):
+        return None
+    ceiling = max_quotable_oz(rates)
+    if ceiling is not None and float(oz) > ceiling:
         return None
     group = group_for_zone(zone_for_zip(dest_zip, rates), rates)
     if group is None:
