@@ -1013,19 +1013,44 @@ class TestQuoteValidator(unittest.TestCase):
             self._rates(), oz=8, line=["USPS/Ground Advantage/8.00"])
         self.assertTrue(any("at or above the ADVERTISED" in p for p in problems))
 
-    def test_a_suspiciously_small_discount_is_refused(self):
-        """The exact shape the 1 lb zone 6 quote made: $9.24 against $9.63 advertised.
+    def test_the_discount_check_compares_only_within_a_band(self):
+        """A 1 lb quote must not be judged against sub-1-lb evidence.
 
-        Every verified cell sits about 22% below advertised. Four percent is a retail line. This
-        catches it on its own row, without needing a neighbouring band to contradict it — which is
-        what the monotonicity check needed, and only after a whole session had been quoted.
+        The discount is not uniform across bands: the July 2026 change made sub-1-lb flat and cut
+        it far harder than the pound bands. An earlier version pooled every band into one expected
+        discount and refused $9.24 at 1 lb zone 6 for being "only 4% off" — measured against
+        sub-1-lb cells it had nothing to do with. That was a false positive on a rate that
+        reproduced exactly, and the fix is to compare like with like.
         """
         rates = self._rates()
         rates["zone_map"]["354"] = 6
+        rates["cell_provenance"]["core.sub.near"] = {
+            "verified": True, "service": "Ground Advantage", "rate_basis": "weight",
+            "price_usd": 5.83, "dest_zip": "90210"}
         problems, _n, _c, _k = self._check(
             rates, dest="35401", oz=16, line=["USPS/Ground Advantage/9.24"])
-        self.assertTrue(any("below the advertised" in p for p in problems),
-                        f"expected a discount-plausibility refusal, got {problems}")
+        self.assertEqual(problems, [],
+                         "a sub-1-lb peer says nothing about the 1 lb band and must not refuse it")
+
+    def test_a_small_discount_is_refused_against_a_peer_in_the_same_band(self):
+        """With real evidence in the SAME band, an outlier is still caught."""
+        rates = self._rates()
+        rates["zone_map"]["354"] = 6
+        rates["cell_provenance"]["core.sub.near"] = {
+            "verified": True, "service": "Ground Advantage", "rate_basis": "weight",
+            "price_usd": 5.83, "dest_zip": "90210"}          # 21.8% below advertised $7.46
+        problems, _n, _c, _k = self._check(
+            rates, dest="35401", oz=8, line=["USPS/Ground Advantage/7.70"])   # only 2% below
+        self.assertTrue(any("same band" in p.lower() or "every verified" in p for p in problems),
+                        f"expected a same-band discount refusal, got {problems}")
+
+    def test_cubic_takeover_is_named_as_a_cause_of_twin_prices(self):
+        """Once Cubic wins the rate shop it is flat across weight, so bands start repeating."""
+        rates = self._rates()
+        rates["rate_table"]["core"]["5"] = {"near": 8.17, "mid": None, "far": None}
+        problems, _n, _c, _k = self._check(rates, oz=96, line=["USPS/Ground Advantage/8.17"])
+        self.assertTrue(any("CUBIC" in p for p in problems),
+                        f"the twin-price message must name cubic takeover, got {problems}")
 
     def test_a_genuine_commercial_rate_passes(self):
         """No false positives on the figures already verified."""

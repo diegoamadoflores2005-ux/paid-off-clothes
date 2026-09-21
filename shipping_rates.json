@@ -1312,7 +1312,7 @@
         "$9.24 at 1 lb (2026-09-21, 35401, 12x12x11)",
         "$8.17 at 2 lb, same session — a HEAVIER parcel priced lower"
       ],
-      "status": "OPEN — $9.24 identified as the outlier; nothing recorded",
+      "status": "OPEN — leading model says NEITHER figure is wrong; one quote tests it",
       "why_it_matters": [
         "Postage cannot fall as weight rises on one service, so one of the two is wrong.",
         "Two independent tests both point at the 1 lb figure, not the 2 lb one:",
@@ -1327,8 +1327,27 @@
         "Dropping the 1 lb row leaves a clean rising ladder: $6.07 -> $8.17."
       ],
       "nothing_recorded": "All three rows are held, not just the bad one. The 16 September session is the precedent: it produced two wrong figures and only one was noticed at the time. A session that produced one bad quote is suspect as a whole until the bad one is explained.",
-      "to_resolve": "Re-quote 1 lb and 2 lb back to back to 35401 in the same box, recording every service line and its price for each, and confirming the weight field reads what was typed.",
-      "prevention": "record_quote.py now checks each quote against the published advertised rate for its band and zone. It refuses a price at or above advertised — impossible for a below-Commercial account — and one less than 10% below it. That catches this on its own row, without needing a neighbouring band to contradict it."
+      "to_resolve": "Quote 5 lb and 10 lb to 35401 in the same 12x12x11 box. Both $8.17 confirms cubic has taken the column over; rising figures refute it.",
+      "prevention": "record_quote.py now checks each quote against the published advertised rate for its band and zone. It refuses a price at or above advertised — impossible for a below-Commercial account — and one less than 10% below it. That catches this on its own row, without needing a neighbouring band to contradict it.",
+      "update_after_repeat": [
+        "Both prices reproduced exactly, and neither matches any figure in the published",
+        "advertised sheet, so neither is a retail line. My earlier 'retail line' reading of",
+        "$9.24 is withdrawn, and the check that produced it was a false positive — it judged a",
+        "1 lb quote against discounts measured on sub-1-lb cells. Fixed to compare within a band.",
+        "",
+        "A model that fits ALL THREE figures with no error: displayed = min(weight_based(lb),",
+        "cubic(box)), with cubic not used below 1 lb and flat across weight above it.",
+        "  8 oz  weight-based $6.07, cubic not used under 1 lb        -> $6.07",
+        "  1 lb  weight-based $9.24, the big sub-1-lb -> 1 lb jump    -> $9.24",
+        "  2 lb  weight-based above $8.17, cubic $8.17 now wins       -> $8.17",
+        "So the ladder really does dip, because two products are priced either side of 2 lb.",
+        "",
+        "The advertised sheet supports the 1 lb jump: sub-1-lb zone 6 is $7.86 against $9.63 at",
+        "1 lb, a 22.5% step. The account shows 52%, bigger because the July 2026 flat sub-1-lb",
+        "rate cut the bottom band harder than the 1 lb one. That also explains why the pooled",
+        "discount check misfired: ~22%-off came from sub-1-lb cells, a band discounted more."
+      ],
+      "sharp_prediction": "If $8.17 is cubic for this box at zone 6, EVERY weight from 2 lb to 20 lb in this box returns exactly $8.17. Cubic ignores weight."
     }
   ],
   "zone_map_source": {
@@ -1924,5 +1943,11 @@
     },
     "observed_account_discount": "~22% off advertised, from the two verified sub-1-lb cells: $5.83 vs $7.46 at zone 4 (21.8%), $6.07 vs $7.86 at zone 6 (22.8%). A quote only a few percent below advertised is very likely a retail line rather than this account's.",
     "note": "Zone 8 and zone 9 are identical in both printed rows."
+  },
+  "box_strategy_limit": {
+    "finding": "The 12x12x11 box was chosen to push Cubic into its dearest tier so the weight-based line would surface. That worked at zone 4. At zone 6 it appears to fail: weight-based rises faster with distance than Cubic does, so Cubic wins from 2 lb up and hides the weight-based line again.",
+    "why_a_bigger_box_cannot_fix_it": "Over 1728 cu in triggers dimensional weight, and dimensional weight applies to zones 5-9 specifically. Zone 6 is inside that range, so any box large enough to make Cubic uncompetitive is also large enough to inflate the billed weight. There is no box that reveals weight-based pricing for mid, far or territories.",
+    "consequence_if_confirmed": "A weight-BASED table is not collectible for the three outer groups. The table would have to move to rate_basis 'cheapest_available' against one committed, measured package — which was already recorded as intended_rate_basis, and which the code already supports and gates via package_problem().",
+    "status": "UNCONFIRMED — rests on the 5 lb / 10 lb test above."
   }
 }

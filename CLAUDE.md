@@ -427,6 +427,13 @@ its dearest tier while staying under the 1728 cu in dimensional-weight threshold
 length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
 revealing it.
 
+**The discount off advertised is NOT uniform across bands.** The July 2026 change made sub-1-lb
+flat and cut it far harder than the pound bands, so a sub-1-lb cell sits ~22% below advertised while
+1 lb sits far less. A check that pooled every band into one expected discount refused a $9.24 quote
+at 1 lb zone 6 for being "only 4% off" — judged against sub-1-lb evidence it had nothing to do with.
+It reproduced exactly and was almost certainly correct. Only a verified cell in the **same band** is
+evidence about that band.
+
 **Quotes are checked against the published advertised rate.** `advertised_reference` in
 `shipping_rates.json` holds Pirate Ship's public sub-1-lb and 1 lb rates for all nine zones — the
 only rows not redacted in our weight range. They may **never** fill a cell; they are a ceiling. Both

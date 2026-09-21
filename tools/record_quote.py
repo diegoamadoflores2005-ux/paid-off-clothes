@@ -33,9 +33,9 @@ RATES = os.path.join(APP_DIR, "shipping_rates.json")
 NONSTANDARD_LENGTH_IN = 22       # $4.50 over this
 OVERSIZE_VOLUME_CU_FT = 2.0      # $21.00 over this
 DIM_WEIGHT_CU_IN = 1728          # dim weight above this, and only to zones 5-9
-# Both verified sub-1-lb cells sit ~22% below advertised. 10% is deliberately loose: it passes any
-# genuine commercial rate while catching a retail line, which is what the gap looks like in practice.
-MIN_PLAUSIBLE_DISCOUNT = 0.10
+# How far a quote may fall below the smallest discount seen on a VERIFIED cell in the same band
+# before it is treated as a different product. Generous, because one or two peers is thin evidence.
+DISCOUNT_TOLERANCE = 0.08
 
 CUBIC_MAX_CU_FT = 1.0
 CUBIC_MAX_SIDE_IN = 22
@@ -72,6 +72,11 @@ def parse_line(text):
     except ValueError:
         raise SystemExit(f"price in {text!r} is not a number")
     return {"carrier": bits[0], "service": bits[1], "price_usd": round(price, 2)}
+
+
+def zone_of(entry, rates, orders):
+    """The zone a recorded cell was quoted to, from its own dest_zip."""
+    return orders.zone_for_zip(entry.get("dest_zip"), rates)
 
 
 def box_facts(dims, zone):
@@ -179,12 +184,26 @@ def check(args, rates, orders):
                 f"${chosen['price_usd']:.2f} is at or above the ADVERTISED rate of ${ceiling:.2f} "
                 f"for {band} lb to zone {zone}. This account prices below Commercial, so it cannot "
                 f"pay more than the advertised figure — that is a retail or wrong-service line.")
-        elif off < MIN_PLAUSIBLE_DISCOUNT:
-            problems.append(
-                f"${chosen['price_usd']:.2f} is only {off * 100:.1f}% below the advertised "
-                f"${ceiling:.2f}, where every verified cell sits about 22% below. That usually "
-                f"means a retail line was read instead of the commercial one. If this really is "
-                f"the price, say so and the threshold in record_quote.py can be revisited.")
+        else:
+            # Compare like with like. The discount is NOT uniform across bands: the July 2026
+            # change made sub-1-lb flat and cut it much harder than the pound bands, so a sub-1-lb
+            # cell sits ~22% below advertised while 1 lb sits far less. An earlier version pooled
+            # every band into one expected discount and refused a 1 lb quote for being "only 4%
+            # off" — comparing it against sub-1-lb evidence it had nothing to do with. Only a
+            # verified cell in the SAME band is evidence about that band.
+            peers = [e for key, e in (rates.get("cell_provenance") or {}).items()
+                     if e.get("verified") and key.split(".")[1] == band and e.get("price_usd")
+                     and (adv.get(band) or {}).get(str(zone_of(e, rates, orders)))]
+            offs = []
+            for e in peers:
+                peer_ceiling = adv[band][str(zone_of(e, rates, orders))]
+                offs.append(1.0 - e["price_usd"] / peer_ceiling)
+            if offs and off < min(offs) - DISCOUNT_TOLERANCE:
+                problems.append(
+                    f"${chosen['price_usd']:.2f} is {off * 100:.1f}% below the advertised "
+                    f"${ceiling:.2f}, but every verified {band} lb cell sits at least "
+                    f"{min(offs) * 100:.1f}% below. Same band, very different discount — check the "
+                    f"service line.")
 
     # A quote that lands exactly on another band's price, to the cent, is far more likely to be
     # that band than a coincidence. This is the shape the 12x12x11 control test made: entered as
@@ -200,9 +219,11 @@ def check(args, rates, orders):
     if twins:
         problems.append(
             f"${chosen['price_usd']:.2f} is exactly the price already recorded for band "
-            f"{', '.join(twins)} in this group. On a rising ladder two bands do not share a price "
-            f"by chance — check the weight field actually said {args.oz:g} oz, since a stale one "
-            f"from a previous quote produces precisely this.")
+            f"{', '.join(twins)} in this group. Two bands share a price for one of two reasons, "
+            f"and neither belongs in a weight-based table: a stale weight field from the previous "
+            f"quote, or Ground Advantage CUBIC winning the rate shop — cubic is flat across weight, "
+            f"so once it takes over, every band above returns the same figure. Check the weight "
+            f"field said {args.oz:g} oz and check which service the line names.")
 
     # Monotonicity, checked against the real neighbours rather than after the fact.
     probe = json.loads(json.dumps(rates))
