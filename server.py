@@ -119,6 +119,18 @@ PRIVATE_DIRS = {"db", "backups", "tools"}
 CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
+def _pending(row):
+    """True when this order's shipping is awaiting a manual quote.
+
+    sqlite3.Row has no .get, and the column is absent on a database that predates migration 005,
+    so this tolerates both rather than raising on an old row.
+    """
+    try:
+        return bool(row["shipping_pending"])
+    except (IndexError, KeyError):
+        return False
+
+
 def csv_safe(value):
     """Neutralise a value that a spreadsheet would otherwise read as a formula."""
     text = "" if value is None else str(value)
@@ -599,8 +611,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         "placed_at": o["placed_at"], "status": o["status"],
                         "inventory_state": o["inventory_state"],
                         "subtotal": (o["subtotal_cents"] or 0) / 100,
-                        "shipping": (o["shipping_cents"] or 0) / 100,
-                        "total": (o["total_cents"] or 0) / 100,
+                        # A pending order's shipping_cents is 0 only to satisfy the column's NOT
+                        # NULL. Rendering that as "$0.00" would tell the buyer shipping was free.
+                        "shipping": None if _pending(o) else (o["shipping_cents"] or 0) / 100,
+                        "total": None if _pending(o) else (o["total_cents"] or 0) / 100,
+                        "shipping_pending": _pending(o),
                         "weight_oz": o["weight_oz"],
                         "ship_to": {"name": o["ship_name"], "address1": o["ship_address1"],
                                     "address2": o["ship_address2"], "city": o["ship_city"],
@@ -1010,15 +1025,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             finally:
                 conn.close()
             zone = orders.zone_for_zip(dest_zip) if dest_zip else None
+            manual = bool(q.get("needs_manual_quote"))
             self._send_json({
                 "ok": True,
                 "subtotal": q["subtotal_cents"] / 100,
-                "shipping": q["shipping_cents"] / 100,
-                "total": q["total_cents"] / 100,
+                # None, not 0, when the order needs a human. A zero here would render as free
+                # shipping, which is the one wrong answer worse than no answer.
+                "shipping": None if manual else q["shipping_cents"] / 100,
+                "total": None if manual else q["total_cents"] / 100,
                 "weight_oz": q["weight_oz"],
-                # 'zone' means this is the charged rate; 'estimate' means the flat ladder applied,
-                # because the table cannot price this destination yet.
+                # 'zone' is the charged rate, 'estimate' the flat ladder, 'manual' too heavy for
+                # either — the order is quoted by a person rather than guessed at.
                 "source": q.get("shipping_source", "estimate"),
+                "needs_manual_quote": manual,
+                "manual_quote_reason": q.get("manual_quote_reason"),
                 "zone": zone,
                 "zone_group": orders.group_for_zone(zone) if zone else None,
             })
@@ -1029,6 +1049,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # by db/orders.py exactly as the reserve flow does, and the Checkout Session is built from
         # THOSE figures. Stripe is told what to charge by the server, so a tampered cart can change
         # what is ordered but never what it costs.
+        # A manual-quote order has no total, so there is nothing to charge. It is refused here
+        # rather than further in, where a None would reach Stripe's amount field.
         if self.path == "/api/checkout/session":
             cfg = stripe_client.load_config()
             if not stripe_client.is_configured(cfg):
@@ -1069,6 +1091,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if not orders.expire_pending(conn):
                         raise
                     result = orders.create_order(conn, email, requested, ship_to, idempotency_key=key)
+
+                if result.get("needs_manual_quote"):
+                    # The order exists and holds its stock; it simply has no total yet. Stripe
+                    # cannot be given a None amount, and inventing one would charge the buyer a
+                    # figure nobody computed.
+                    self._send_json({
+                        "ok": False,
+                        "needs_manual_quote": True,
+                        "order_ref": result["order_ref"],
+                        "error": result.get("manual_quote_reason")
+                                 or "This order needs a shipping quote from us before payment.",
+                    }, status=409)
+                    return
 
                 order_row = orders.order_by_ref(conn, result["order_ref"])
 
@@ -1223,8 +1258,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "ref": result["order_ref"],
                 "duplicate": result.get("duplicate", False),
                 "subtotal": (result.get("subtotal_cents") or 0) / 100,
-                "shipping": (result.get("shipping_cents") or 0) / 100,
-                "total": (result.get("total_cents") or 0) / 100,
+                # None, not 0.00, when the order awaits a manual quote. The order is placed and
+                # its stock is held; what it lacks is a shipping price, and a zero claims the
+                # opposite. See _pending().
+                "shipping": (None if result.get("needs_manual_quote")
+                             else (result.get("shipping_cents") or 0) / 100),
+                "total": (None if result.get("needs_manual_quote")
+                          else (result.get("total_cents") or 0) / 100),
+                "needs_manual_quote": bool(result.get("needs_manual_quote")),
+                "manual_quote_reason": result.get("manual_quote_reason"),
             })
             return
 

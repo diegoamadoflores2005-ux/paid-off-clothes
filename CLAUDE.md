@@ -402,6 +402,27 @@ the dimensional weight is already **12.4 lb**, so crossing it punishes *light, b
 hardest — a 30 lb parcel can cross it and still bill on actual weight. Every order is safe in a box
 of 1 cu ft or less, whatever it weighs.
 
+**An order too heavy to price gets a manual quote — it is never blocked and never guessed at.**
+Above `max_quotable_oz` (31 lb) an order needs the large box, which bills on volume rather than
+weight and adds $25.50 in fixed fees; no weight-indexed ladder can price that. `needs_manual_quote()`
+flags it, `shipping_cents()` returns **None rather than a number**, and `quote()` carries
+`needs_manual_quote` plus a reason written in the buyer's terms. The order is still placed and still
+holds its stock — it simply has no total yet, and Stripe checkout refuses it rather than being
+handed a None amount.
+
+`MANUAL_QUOTE_OVER_OZ` in `script.js` **mirrors `max_quotable_oz`**, with a parity test, the same
+rule as the weight tables. `setCheckoutShipping()` is still the single writer and now has a third
+mode: it shows *"Quoted by us"* and *"$X + shipping"* rather than a figure it does not have, and
+the pay button asks for a quote instead of showing an amount nobody computed. Every call site must
+pass the mode; a test fails if one cannot express it.
+
+**Storage: `shipping_cents` is NOT NULL and this migration runner is additive and idempotent on
+every boot**, so widening the column would need a table rebuild that cannot run that way. Migration
+`005` adds `shipping_pending` instead: the zero stays to satisfy the constraint and the flag says it
+is a placeholder. **Every path that renders a price must check it** — `$0.00` tells the buyer
+shipping was free, which is the one wrong answer worse than no answer. `_pending()` in `server.py`
+tolerates a row from before the migration, since `sqlite3.Row` has no `.get`.
+
 **A table box must be at most 1 cu ft (1,728 cu in), and the binding band is the LIGHTEST one.**
 `packaging_problem()` measures the largest table box against `max_exact_cu_in()` of the lightest
 required band, not against the ceiling. An earlier version compared it to the 31 lb ceiling and so

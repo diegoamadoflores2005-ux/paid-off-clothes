@@ -134,6 +134,16 @@ const SHIPPING_TIERS = [
 
 const SHIPPING_OVER_MAX = 22; // anything heavier than the last tier
 
+// Orders above this cannot be priced in advance by anyone: they need the large box, which bills on
+// volume rather than weight and adds fixed fees no weight ladder can express. They are not blocked
+// — they go to a human for a real quote. MIRRORS max_quotable_oz in shipping_rates.json, and
+// tests/test_shipping_weights.py fails if the two drift apart.
+const MANUAL_QUOTE_OVER_OZ = 496;
+
+function needsManualQuote(lines) {
+  return lines.length > 0 && orderWeightOz(lines) > MANUAL_QUOTE_OVER_OZ;
+}
+
 function weightOf(p) {
   return p.weightOz ?? CATEGORY_WEIGHT_OZ[p.category] ?? DEFAULT_WEIGHT_OZ;
 }
@@ -1214,7 +1224,7 @@ function openCheckout(items) {
   payBtn.disabled = false;
   applyPaymentCopy(total);
   // Opens on the flat-ladder estimate, then replaces it the moment a ZIP resolves to a zone.
-  setCheckoutShipping(shipping, "estimate", null);
+  setCheckoutShipping(shipping, needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
   refreshCheckoutShipping();
 
   document.getElementById("checkout-overlay").hidden = false;
@@ -1306,22 +1316,40 @@ let shippingQuoteSeq = 0;
 let checkoutShippingSource = "estimate";
 
 // One writer for the shipping figure, the total and the wording, so they cannot disagree on screen.
-function setCheckoutShipping(shipping, source, group) {
+// The single writer for the shipping line, the total and the button amount, so those three can
+// never disagree on screen. It now has a third mode: an order too heavy to price in advance shows
+// no figure at all rather than a wrong one, and the button asks for a quote instead of payment.
+function setCheckoutShipping(shipping, source, group, manualReason) {
   const subtotal = lineTotal(checkoutItems);
-  const total = subtotal + shipping;
-  document.getElementById("checkout-shipping").textContent = money(shipping);
-  document.getElementById("checkout-total-price").textContent = money(total);
+  const manual = source === "manual" || shipping === null || shipping === undefined;
+  const total = manual ? null : subtotal + shipping;
+
+  document.getElementById("checkout-shipping").textContent = manual ? "Quoted by us" : money(shipping);
+  document.getElementById("checkout-total-price").textContent =
+    manual ? `${money(subtotal)} + shipping` : money(total);
 
   const lb = (orderWeightOz(checkoutItems) / 16).toFixed(1);
   const note = document.getElementById("checkout-ship-note");
   if (note) {
-    note.textContent = source === "zone"
-      ? `(${lb} lb, Ground Advantage, ${group || "your"} zone)`
-      : `(${lb} lb, estimated — enter your ZIP for the exact rate)`;
+    if (manual) {
+      // Say why, in the buyer's terms. "Contact us" with no reason reads as a malfunction.
+      note.textContent = manualReason
+        || `(${lb} lb — too large for our automatic rates, so we'll quote it by hand)`;
+    } else {
+      note.textContent = source === "zone"
+        ? `(${lb} lb, Ground Advantage, ${group || "your"} zone)`
+        : `(${lb} lb, estimated — enter your ZIP for the exact rate)`;
+    }
   }
   const payAmount = document.getElementById("checkout-pay-amount");
-  if (payAmount) payAmount.textContent = money(total);
-  checkoutShippingSource = source;
+  if (payAmount) payAmount.textContent = manual ? "" : money(total);
+
+  const payBtn = document.getElementById("checkout-pay-btn") || document.getElementById("co-submit");
+  if (payBtn) {
+    payBtn.dataset.manualQuote = manual ? "1" : "";
+    if (manual) payBtn.textContent = "Request a shipping quote";
+  }
+  checkoutShippingSource = manual ? "manual" : source;
 }
 
 async function refreshCheckoutShipping() {
@@ -1331,7 +1359,7 @@ async function refreshCheckoutShipping() {
 
   // A US ZIP is five digits; anything shorter cannot resolve to a zone, so don't ask.
   if (zip.replace(/\D/g, "").length < 5) {
-    setCheckoutShipping(shippingFor(checkoutItems), "estimate", null);
+    setCheckoutShipping(shippingFor(checkoutItems), needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
     return;
   }
 
@@ -1348,11 +1376,11 @@ async function refreshCheckoutShipping() {
     const data = await res.json();
     if (seq !== shippingQuoteSeq) return;   // a slow earlier reply must not overwrite a newer one
     if (data && data.ok) {
-      setCheckoutShipping(data.shipping, data.source, data.zone_group);
+      setCheckoutShipping(data.shipping, data.source, data.zone_group, data.manual_quote_reason);
       return;
     }
   } catch (err) { /* offline or file:// — fall through to the estimate */ }
-  if (seq === shippingQuoteSeq) setCheckoutShipping(shippingFor(checkoutItems), "estimate", null);
+  if (seq === shippingQuoteSeq) setCheckoutShipping(shippingFor(checkoutItems), needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
 }
 
 // ---------- stripe checkout ----------

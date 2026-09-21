@@ -101,6 +101,10 @@ def shipping_cents(lines, dest_zip=None):
     if not lines:
         return 0, 0.0
     oz = sum(_weight_oz(p) * q for p, _s, q in lines) + PACKAGING_OZ
+    if needs_manual_quote(oz):
+        # None, not a number. Every caller has to decide what to do about an order it cannot
+        # price, and a zero or a guess would let one slip through priced wrongly.
+        return None, float(oz)
     if dest_zip:
         zoned = zone_shipping_cents(oz, dest_zip)
         if zoned is not None:
@@ -111,8 +115,29 @@ def shipping_cents(lines, dest_zip=None):
     return SHIPPING_OVER_MAX, float(oz)
 
 
-def shipping_source(dest_zip=None):
-    """'zone' when this destination would be priced from the verified table, else 'estimate'."""
+def needs_manual_quote(oz, rates=None):
+    """True when this order is too heavy for any rate this shop can compute in advance.
+
+    Above the ceiling the parcel needs the large box, and that box crosses every dimensional
+    threshold at once — it bills on volume, not weight, and adds $25.50 in fixed fees. No
+    weight-indexed ladder can price it, and guessing produces an undercharge the shop absorbs.
+
+    So the order is not blocked and it is not priced: it goes to a human for a real quote. That is
+    strictly better than both alternatives — refusing the sale, or charging a number known to be
+    wrong.
+    """
+    rates = load_rates() if rates is None else rates
+    ceiling = max_quotable_oz(rates)
+    return ceiling is not None and float(oz) > ceiling
+
+
+def shipping_source(dest_zip=None, oz=None):
+    """Which rule priced this order: 'manual', 'zone' or 'estimate'.
+
+    'manual' outranks the others — a too-heavy order cannot be priced by any of them.
+    """
+    if oz is not None and needs_manual_quote(oz):
+        return "manual"
     if not dest_zip or not zone_pricing_ready():
         return "estimate"
     return "zone" if group_for_zone(zone_for_zip(dest_zip)) else "estimate"
@@ -203,9 +228,18 @@ def quote(conn, requested, dest_zip=None):
         })
 
     ship, oz = shipping_cents([(r["product"], r["size"], r["qty"]) for r in resolved], dest_zip)
-    return {"lines": lines, "subtotal_cents": subtotal, "shipping_cents": ship,
-            "total_cents": subtotal + ship, "weight_oz": oz,
-            "shipping_source": shipping_source(dest_zip)}
+    manual = ship is None
+    return {"lines": lines, "subtotal_cents": subtotal,
+            "shipping_cents": None if manual else ship,
+            "total_cents": subtotal if manual else subtotal + ship,
+            "weight_oz": oz,
+            "shipping_source": shipping_source(dest_zip, oz),
+            "needs_manual_quote": manual,
+            "manual_quote_reason": (
+                f"This order weighs {oz/16:.1f} lb, over the {max_quotable_oz()/16:.0f} lb we can "
+                f"price automatically. It ships in a larger box whose cost depends on its "
+                f"dimensions, so we quote it by hand rather than guess."
+            ) if manual else None}
 
 
 # ---- inventory ---------------------------------------------------------------------------------
@@ -261,15 +295,27 @@ def create_order(conn, email, requested, ship_to, idempotency_key=None):
             conn.execute("""INSERT INTO customers(email, first_seen, last_seen) VALUES(?,?,?)
                             ON CONFLICT(email) DO UPDATE SET last_seen=excluded.last_seen""",
                          (email, now, now))
+            manual = bool(q.get("needs_manual_quote"))
             cur = conn.execute("""INSERT INTO orders
                 (email, placed_at, subtotal_cents, shipping_cents, total_cents, weight_oz, status,
                  ship_name, ship_address1, ship_address2, ship_city, ship_state, ship_zip,
-                 ship_country, order_ref, updated_at, currency, inventory_state)
-                VALUES (?,?,?,?,?,?, 'pending', ?,?,?,?,?,?,?, ?,?, 'USD', 'reserved')""",
-                (email, now, q["subtotal_cents"], q["shipping_cents"], q["total_cents"],
-                 q["weight_oz"], ship_to.get("name", ""), ship_to.get("address1", ""),
+                 ship_country, order_ref, updated_at, currency, inventory_state, shipping_pending)
+                VALUES (?,?,?,?,?,?, ?, ?,?,?,?,?,?,?, ?,?, 'USD', 'reserved', ?)""",
+                (email, now, q["subtotal_cents"],
+                 # 0 only because the column is NOT NULL; shipping_pending below is what says this
+                 # is a placeholder. Nothing may render it as a price without checking that flag.
+                 0 if manual else q["shipping_cents"],
+                 q["subtotal_cents"] if manual else q["total_cents"],
+                 q["weight_oz"],
+                 # A manual-quote order is real and holds its stock like any other, but it is not
+                 # payable until a person prices the shipping. Giving it its own status keeps it
+                 # out of every path that assumes a total, rather than letting a NULL leak into
+                 # one that does not check.
+                 "quote_requested" if q.get("needs_manual_quote") else "pending",
+                 ship_to.get("name", ""), ship_to.get("address1", ""),
                  ship_to.get("address2", ""), ship_to.get("city", ""), ship_to.get("state", ""),
-                 ship_to.get("zip", ""), ship_to.get("country", ""), ref, now))
+                 ship_to.get("zip", ""), ship_to.get("country", ""), ref, now,
+                 1 if manual else 0))
             order_id = cur.lastrowid
 
             for i, ln in enumerate(q["lines"]):
@@ -292,7 +338,11 @@ def create_order(conn, email, requested, ship_to, idempotency_key=None):
             return {"order_id": order_id, "order_ref": ref, "duplicate": False,
                     "subtotal_cents": q["subtotal_cents"], "shipping_cents": q["shipping_cents"],
                     "total_cents": q["total_cents"], "lines": q["lines"],
-                    "shipping_source": q.get("shipping_source", "estimate")}
+                    "shipping_source": q.get("shipping_source", "estimate"),
+                    # Carried through so callers do not have to re-derive it from the weight and
+                    # get a different answer than the row that was just written.
+                    "needs_manual_quote": manual,
+                    "manual_quote_reason": q.get("manual_quote_reason")}
         except Exception:
             conn.rollback()
             raise

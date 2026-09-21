@@ -1068,6 +1068,102 @@ class TestPackagingAndDimensions(unittest.TestCase):
         self.assertFalse(self.orders.load_rates()["multi_package"]["supported"])
 
 
+class TestManualQuote(unittest.TestCase):
+    """Orders too heavy to price are quoted by a person, not blocked and not guessed at.
+
+    Above the ceiling an order needs the large box, which bills on volume rather than weight and
+    adds $25.50 in fixed fees. No weight-indexed ladder can price that. The three options were:
+    refuse the sale, charge a number known to be wrong, or hand it to a human. Only the third both
+    keeps the sale and protects the shop.
+    """
+
+    def setUp(self):
+        self.orders = load_orders()
+
+    def test_the_ceiling_is_mirrored_in_the_javascript(self):
+        """Same parity rule as the weight tables: two copies that can drift are a bug waiting."""
+        import re
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        m = re.search(r"const MANUAL_QUOTE_OVER_OZ = ([0-9.]+)", src)
+        self.assertIsNotNone(m, "MANUAL_QUOTE_OVER_OZ not found in script.js")
+        self.assertEqual(float(m.group(1)), float(self.orders.max_quotable_oz()))
+
+    def test_an_order_over_the_ceiling_is_flagged(self):
+        self.assertFalse(self.orders.needs_manual_quote(496))
+        self.assertTrue(self.orders.needs_manual_quote(497))
+
+    def test_shipping_cents_returns_none_rather_than_a_number(self):
+        """Not zero. A zero renders as free shipping, the one wrong answer worse than no answer."""
+        heavy = [({"category": "Shoes"}, "10", 14)]     # 14 x 40 oz + 3 = 563 oz
+        cents, oz = self.orders.shipping_cents(heavy, "90210")
+        self.assertGreater(oz, self.orders.max_quotable_oz())
+        self.assertIsNone(cents)
+
+    def test_a_priceable_order_is_unaffected(self):
+        light = [({"category": "Shirts"}, "M", 5)]
+        cents, oz = self.orders.shipping_cents(light, "90210")
+        self.assertIsNotNone(cents)
+        self.assertGreater(cents, 0)
+        self.assertLessEqual(oz, self.orders.max_quotable_oz())
+
+    def test_manual_outranks_zone_and_estimate(self):
+        self.assertEqual(self.orders.shipping_source("90210", 600), "manual")
+        self.assertEqual(self.orders.shipping_source("90210", 100), "estimate")
+        self.assertEqual(self.orders.shipping_source(None, 600), "manual",
+                         "too heavy is too heavy whether or not an address was given")
+
+    def test_no_display_path_reports_zero_shipping_for_a_pending_order(self):
+        """shipping_cents is 0 on those rows only because the column is NOT NULL.
+
+        A table rebuild to widen it cannot run under this migration model, which is additive and
+        idempotent on every boot — so the zero stays and `shipping_pending` says it is a
+        placeholder. Every path that renders a price has to check the flag, because "$0.00" tells
+        the buyer shipping was free.
+        """
+        src = open(os.path.join(APP_DIR, "server.py"), encoding="utf-8").read()
+        self.assertIn('"shipping": None if _pending(o)', src,
+                      "the order-list path must not render a pending order's zero")
+        self.assertIn('None if result.get("needs_manual_quote")', src,
+                      "the order-creation response must not render it either")
+        self.assertIn("def _pending(row):", src)
+
+    def test_the_migration_adds_the_flag_idempotently(self):
+        """It runs on every boot, so it has to survive already being applied."""
+        path = os.path.join(APP_DIR, "db", "migrations", "005_manual_quote.sql")
+        self.assertTrue(os.path.exists(path), "migration 005 is missing")
+        sql = open(path, encoding="utf-8").read()
+        self.assertIn("ADD COLUMN shipping_pending", sql)
+        self.assertIn("DEFAULT 0", sql, "existing orders must default to not-pending")
+
+    def test_pending_tolerates_a_row_from_before_the_migration(self):
+        """sqlite3.Row has no .get, and an old row has no such column."""
+        src = open(os.path.join(APP_DIR, "server.py"), encoding="utf-8").read()
+        block = src[src.index("def _pending(row):"):]
+        block = block[:block.index("\ndef ")]
+        self.assertIn("except (IndexError, KeyError)", block)
+
+    def test_the_javascript_writes_no_total_for_a_manual_order(self):
+        """setCheckoutShipping is the single writer; it must not render a number it does not have."""
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        block = src[src.index("function setCheckoutShipping("):]
+        block = block[:block.index("\n}")]
+        self.assertIn("Quoted by us", block)
+        self.assertIn("+ shipping", block, "the total must read as subtotal plus an unknown")
+        self.assertIn('payAmount.textContent = manual ? ""', block,
+                      "the pay button must not show an amount that was never computed")
+
+    def test_every_call_site_passes_the_mode(self):
+        """A caller that forgets it would silently price a heavy order off the flat ladder."""
+        import re
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        calls = re.findall(r"setCheckoutShipping\([^;]*\);", src)
+        self.assertGreaterEqual(len(calls), 3)
+        for call in calls:
+            with self.subTest(call=call[:60]):
+                self.assertTrue("manual" in call or "data.source" in call,
+                                "this call site cannot express a manual quote")
+
+
 class TestRatesAreNotServed(unittest.TestCase):
     """shipping_rates.json must not be reachable over HTTP.
 
@@ -1083,11 +1179,18 @@ class TestRatesAreNotServed(unittest.TestCase):
         self.assertIn('"shipping_rates.json"', block)
 
     def test_the_front_end_does_not_fetch_it(self):
-        """If this ever fails, the file has to be served and the guard above must be reconsidered."""
+        """If this ever fails, the file has to be served and the guard above must be reconsidered.
+
+        It looks for the path as a STRING LITERAL — something that could be fetched — rather than
+        any mention of the name. A comment explaining that a constant mirrors shipping_rates.json
+        is exactly the kind of note worth keeping, and an over-broad check punished writing it.
+        """
         for name in ("script.js", "index.html"):
             with self.subTest(file=name):
                 src = open(os.path.join(APP_DIR, name), encoding="utf-8").read()
-                self.assertNotIn("shipping_rates", src)
+                for literal in ('"shipping_rates', "'shipping_rates", "`shipping_rates"):
+                    self.assertNotIn(literal, src,
+                                     f"{name} references shipping_rates.json as a fetchable path")
 
 
 class TestQuoteValidator(unittest.TestCase):
