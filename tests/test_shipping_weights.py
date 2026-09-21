@@ -1021,13 +1021,47 @@ class TestPackagingAndDimensions(unittest.TestCase):
         self.assertFalse(self.orders.table_rate_is_exact(560, 6885, 27, 1),
                          "the $21 and $4.50 fees apply in every zone, unlike dimensional weight")
 
-    def test_the_everyday_box_is_not_yet_supplied(self):
-        """Nothing is assumed while the owner confirms it."""
-        policy = self.orders.load_rates()["packaging"]["policy"]
-        self.assertIn("NOT yet supplied", policy["everyday"])
-        table_boxes = [b for b in self.orders.load_rates()["packaging"]["boxes"]
-                       if b.get("use", "table") == "table"]
-        self.assertEqual(table_boxes, [], "no box may stand in for the everyday one")
+    def test_the_candidate_everyday_box_is_rejected_on_volume(self):
+        """20.5 x 15.5 x 10 = 3,178 cu in = 1.84 cu ft, past the 1 cu ft dim-weight threshold.
+
+        It clears the other two — under 2 cu ft, under 22 in — but its dimensional weight is
+        22.9 lb, so every parcel in it bills as 22.9 lb to zones 5-9 whatever it holds.
+        """
+        problem = self.orders.packaging_problem()
+        self.assertIsNotNone(problem)
+        self.assertIn("22.9 lb", problem)
+        self.assertIn("1728 cu in", problem, "it must name the limit, not just the failure")
+        self.assertFalse(self.orders.zone_pricing_ready())
+
+    def test_the_gate_measures_against_the_LIGHTEST_band_not_the_ceiling(self):
+        """The bug this box exposed.
+
+        An earlier version compared the dimensional weight against the 31 lb ceiling. A 1.84 cu ft
+        box bills at 22.9 lb, comfortably under 31, so it PASSED — while undercharging every band
+        from a single tee up to 20 lb. The undercharge lives at the light end, not the heavy one.
+        """
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "candidate", "dims_in": [20.5, 15.5, 10], "cu_in": 3177.5,
+             "use": "table", "verified": True}]
+        problem = self.orders.packaging_problem(rates)
+        self.assertIsNotNone(problem, "a box billing at 22.9 lb cannot back a sub-1-lb band")
+        self.assertLess(3177.5 / 139 * 16, rates["max_quotable_oz"],
+                        "and it is under the ceiling, which is exactly why that test was wrong")
+
+    def test_an_unmeasured_box_that_cannot_work_says_so_first(self):
+        """Reporting 'not measured yet' would send someone to measure a box that cannot pass."""
+        problem = self.orders.packaging_problem()
+        self.assertIn("not verified either", problem)
+        self.assertNotEqual(problem.split("(")[0].strip(),
+                            "no measured table box on file")
+
+    def test_a_box_at_exactly_one_cubic_foot_passes(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "12x12x12", "dims_in": [12, 12, 12], "cu_in": 1728,
+             "use": "table", "verified": True}]
+        self.assertIsNone(self.orders.packaging_problem(rates))
 
     def test_multi_package_is_declared_unsupported(self):
         """Recorded rather than silently absent: two parcels cost two labels."""

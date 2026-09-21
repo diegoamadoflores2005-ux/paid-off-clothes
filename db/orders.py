@@ -735,13 +735,23 @@ def packaging_problem(rates=None):
     # Only boxes the table is meant to price. A box marked `manual` is recorded so its existence
     # is known — and so nobody re-derives it later — but it is deliberately outside the table:
     # an order needing it exceeds what a weight-indexed ladder can express and wants a person.
-    boxes = [b for b in (pack.get("boxes") or [])
-             if b.get("verified") and b.get("use", "table") == "table"]
+    candidates = [b for b in (pack.get("boxes") or []) if b.get("use", "table") == "table"]
+    boxes = [b for b in candidates if b.get("verified")]
     if not boxes:
+        # A box too big to work is worth saying so about even before it is measured precisely:
+        # 1.84 cu ft against a 1.0 cu ft limit is not a measurement-error question, and reporting
+        # "not measured yet" would send someone off to measure a box that cannot pass.
+        oversized = _box_volume_problem(candidates, rates)
+        if oversized:
+            return oversized + " (and it is not verified either)"
         return ("no measured table box on file — every rate assumes the real parcel stays under "
                 "1 cu ft, and nothing has confirmed that")
-    ceiling = max_quotable_oz(rates)
-    if ceiling is None:
+    return _box_volume_problem(boxes, rates)
+
+
+def _box_volume_problem(boxes, rates):
+    """Whether the largest of these boxes can back the table's rates, or None."""
+    if not boxes:
         return None
     biggest = max(float(b["cu_in"]) for b in boxes)
     longest = max(float(max(b["dims_in"])) for b in boxes)
@@ -751,12 +761,25 @@ def packaging_problem(rates=None):
     if biggest > OVERSIZE_OVER_CU_IN:
         return (f"the largest measured box is {biggest:.0f} cu in, over 2 cu ft, so every parcel in "
                 f"it carries a $21 fee the table does not charge")
-    if biggest > DIM_WEIGHT_OVER_CU_IN:
+    # The binding band is the LIGHTEST one the table prices, not the heaviest. An earlier version
+    # compared the dimensional weight against the ceiling, which is backwards: a box can bill well
+    # under the 31 lb ceiling and still bill far over what a single tee weighs. That is where the
+    # undercharge lives, and it would have passed a 1.84 cu ft box as fine.
+    lightest_oz = None
+    table = rates.get("rate_table") or {}
+    for lb, _sec, band in table_bands(table):
+        if band not in set(required_bands(rates)):
+            continue
+        oz = 15.99 if band == "sub" else lb * 16.0
+        if lightest_oz is None or oz < lightest_oz:
+            lightest_oz = oz
+    if lightest_oz is not None and biggest > max_exact_cu_in(lightest_oz):
         dim = biggest / DIM_DIVISOR * 16.0
-        if dim > ceiling:
-            return (f"the largest measured box is {biggest:.0f} cu in, which bills as "
-                    f"{dim/16:.1f} lb to zones 5-9 — above the {ceiling/16:.0f} lb ceiling, so a "
-                    f"light order in that box would be charged less than its label costs")
+        return (f"the largest table box is {biggest:.0f} cu in, which bills as {dim/16:.1f} lb to "
+                f"zones 5-9 whatever it holds. The lightest band this table prices is "
+                f"{lightest_oz/16:.2f} lb, so every band below {dim/16:.1f} lb would be charged "
+                f"less than its label costs. A table box must be at most "
+                f"{max_exact_cu_in(lightest_oz):.0f} cu in.")
     return None
 
 

@@ -402,6 +402,16 @@ the dimensional weight is already **12.4 lb**, so crossing it punishes *light, b
 hardest — a 30 lb parcel can cross it and still bill on actual weight. Every order is safe in a box
 of 1 cu ft or less, whatever it weighs.
 
+**A table box must be at most 1 cu ft (1,728 cu in), and the binding band is the LIGHTEST one.**
+`packaging_problem()` measures the largest table box against `max_exact_cu_in()` of the lightest
+required band, not against the ceiling. An earlier version compared it to the 31 lb ceiling and so
+passed a 1.84 cu ft candidate box: its dimensional weight is 22.9 lb, comfortably under 31, while
+undercharging every band from a single tee up to 20 lb. **The undercharge lives at the light end.**
+The 20.5 × 15.5 × 10 box fails for exactly that reason — it clears the 2 cu ft and 22 in limits but
+bills as 22.9 lb to mid, far and territories whatever it holds, so a single-tee order to New York
+would be charged $6.07 against a real cost of at least $15.84. Near is unaffected, since dimensional
+weight never applies to zones 1–4.
+
 **`packaging_problem()` gates go-live on a measured box.** Nothing in `packaging.boxes` counts until
 `verified` is true, meaning someone put a tape measure on it. Without one, every rate silently
 assumes the real parcel stays under 1 cu ft. Both failure modes above are **undercharges**, and an

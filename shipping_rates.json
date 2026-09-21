@@ -2348,6 +2348,27 @@
     },
     "boxes": [
       {
+        "name": "everyday box (candidate)",
+        "dims_in": [
+          20.5,
+          15.5,
+          10
+        ],
+        "cu_in": 3177.5,
+        "cu_ft": 1.84,
+        "use": "table",
+        "verified": false,
+        "provenance": "Measured with an iPhone Measure app — approximate, and not confirmed interior.",
+        "verdict": "FAILS as the single everyday box.",
+        "why": [
+          "3,178 cu in is 1.84 cu ft, past the 1 cu ft where dimensional weight begins. It clears the other two thresholds — under 2 cu ft so no $21, and 20.5 in so no $4.50.",
+          "Its dimensional weight is 3,178 / 139 = 22.86 lb, so every parcel in it bills as 22.9 lb to mid, far and territories no matter what it holds.",
+          "Near is unaffected: dimensional weight never applies to zones 1-4.",
+          "So every band the table prices except 31 lb is undercharged to three of the four groups. A single-tee order to New York would be charged $6.07 against a real cost of at least $15.84 — a floor, since the true 23 lb rate is unquoted and higher than the 9 lb one."
+        ],
+        "where_it_IS_usable": "Orders of roughly 23 lb and up, where actual weight already exceeds the dimensional weight. That is a narrow window between 23 lb and the 31 lb ceiling, and those orders sit close to the manual boundary anyway."
+      },
+      {
         "name": "large box",
         "dims_in": [
           27,
@@ -2417,6 +2438,28 @@
         "31": 3456
       },
       "ceiling_may_need_lowering": "max_quotable_oz is 31 lb, chosen to clear the deepest advertised bulk tier. Once the everyday box's capacity is known the real ceiling may be lower — whatever weight still FITS that box. An order too big for it needs the large box, and the large box is manual."
+    },
+    "what_needs_to_change": {
+      "recommended": {
+        "option": "An everyday box at or under 1 cubic foot — 1,728 cu in.",
+        "examples_of_the_limit": "12 x 12 x 12 is exactly 1,728. Anything smaller also works.",
+        "why": "Below 1 cu ft dimensional weight does not apply at any weight or any zone, so every band in the table is exactly right and all 26 outstanding quotes stand as planned. It is the only option that needs no further quoting and no new code.",
+        "open_question": "Whether a 1 cu ft box holds the deepest advertised tiers — 20 shirts at 8.9 lb, 16 belts at 10.2 lb. That is the priority-3 capacity count and is still unmeasured. If it does not, those orders move to the large box and become manual, which lowers the table's real ceiling."
+      },
+      "alternatives_considered": [
+        {
+          "option": "Keep the 20.5 x 15.5 x 10 box and restrict it to orders of 23 lb and up.",
+          "verdict": "Workable but thin. It leaves every lighter order needing a second box anyway, so it does not remove the need for a sub-1-cu-ft box — it only adds a third."
+        },
+        {
+          "option": "Price on dimensions as well as weight.",
+          "verdict": "Correct in principle and expensive in practice: every band would need quoting per box, multiplying the 26 remaining quotes, and the checkout would have to know which box an order will use before it is packed."
+        },
+        {
+          "option": "Use this box for near-zone orders only, since zones 1-4 have no dimensional weight.",
+          "verdict": "Rejected. It is true, but it makes packing depend on the destination, and one mis-packed order to a mid or far ZIP silently costs the shop the full gap."
+        }
+      ]
     }
   },
   "multi_package": {
