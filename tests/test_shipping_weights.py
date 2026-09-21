@@ -946,6 +946,49 @@ class TestPackagingAndDimensions(unittest.TestCase):
             {"name": "guessed", "dims_in": [12, 12, 11], "cu_in": 1584, "verified": False}]
         self.assertIsNotNone(self.orders.packaging_problem(rates))
 
+    def test_a_manual_box_does_not_gate_the_table(self):
+        """The 27x15x17 box exists and is recorded, but the table was never meant to price it.
+
+        Marking it `manual` keeps it on the record — so nobody re-derives it later — without
+        pretending the table covers it, and without blocking a table box that does qualify.
+        """
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "large", "dims_in": [27, 15, 17], "cu_in": 6885,
+             "use": "manual", "verified": True},
+            {"name": "ordinary", "dims_in": [12, 12, 11], "cu_in": 1584,
+             "use": "table", "verified": True},
+        ]
+        self.assertIsNone(self.orders.packaging_problem(rates),
+                          "a manual box must not block a qualifying table box")
+
+    def test_a_manual_box_alone_is_still_no_table_box(self):
+        rates = json.loads(json.dumps(self.orders.load_rates()))
+        rates["packaging"]["boxes"] = [
+            {"name": "large", "dims_in": [27, 15, 17], "cu_in": 6885,
+             "use": "manual", "verified": True}]
+        self.assertIn("no measured table box", self.orders.packaging_problem(rates))
+
+    def test_the_large_box_really_does_cross_every_threshold(self):
+        """27 x 15 x 17 = 6,885 cu in. Recorded so the numbers behind the exclusion stay checked."""
+        cu_in = 27 * 15 * 17
+        self.assertEqual(cu_in, 6885)
+        self.assertGreater(cu_in, self.orders.DIM_WEIGHT_OVER_CU_IN)
+        self.assertGreater(cu_in, self.orders.OVERSIZE_OVER_CU_IN)
+        self.assertGreater(27, self.orders.LONG_SIDE_OVER_IN)
+        self.assertEqual(self.orders.parcel_surcharge_cents(cu_in, 27), 2550)
+        billed = self.orders.billed_oz(35 * 16, cu_in, 6)
+        self.assertAlmostEqual(billed / 16, 49.53, places=1,
+                               msg="a 35 lb parcel in this box bills as ~50 lb to zones 5-9")
+
+    def test_the_large_box_is_not_recorded_as_verified(self):
+        """Its dimensions were supplied from a past shipment, not measured for this purpose."""
+        boxes = self.orders.load_rates()["packaging"]["boxes"]
+        large = [b for b in boxes if b["cu_in"] == 6885]
+        self.assertTrue(large, "the large box should be on file")
+        self.assertFalse(large[0]["verified"])
+        self.assertEqual(large[0]["use"], "manual")
+
     def test_multi_package_is_declared_unsupported(self):
         """Recorded rather than silently absent: two parcels cost two labels."""
         self.assertFalse(self.orders.load_rates()["multi_package"]["supported"])

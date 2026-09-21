@@ -2346,27 +2346,58 @@
       "side_over_22_in": "+$4.50",
       "consequence": "At exactly 1 cu ft the dimensional weight is already 12.4 lb, so crossing it punishes LIGHT bulky parcels hardest. An order under 12.4 lb is safe only up to 1 cu ft; one over 12.4 lb has headroom to the 2 cu ft fee wall. Every order is safe in a box of 1 cu ft or less, whatever it weighs."
     },
-    "boxes": [],
+    "boxes": [
+      {
+        "name": "large box",
+        "dims_in": [
+          27,
+          15,
+          17
+        ],
+        "cu_in": 6885,
+        "cu_ft": 3.98,
+        "use": "manual",
+        "verified": false,
+        "provenance": "Dimensions supplied by the owner from a past shipment, NOT measured for this purpose and not confirmed to be interior. A corrugated box's interior is smaller than its exterior, though not by enough to change any conclusion here.",
+        "known_use": "16 Sp5der hoodies, total weight ESTIMATED at 35 lb — estimated, never weighed.",
+        "why_excluded_from_the_table": [
+          "It crosses every threshold at once. 6,885 cu in is 3.98 cu ft: 4x the 1 cu ft where dimensional weight begins, 2x the 2 cu ft that adds $21, and its 27 in side is over the 22 in that adds $4.50.",
+          "Billed weight would be 6,885 / 139 = 49.5 lb, rounding to 50 — against 35 lb actual, a 42% inflation — plus $25.50 in fixed fees, to mid, far and territories.",
+          "35 lb is already above the table's 31 lb ceiling, so such an order is not quotable regardless of the box.",
+          "Nothing about this is expressible in a ladder indexed on weight alone. Recording it as a `table` box would not make the table cover it; it would only make the table wrong."
+        ],
+        "length_plus_girth_in": 91,
+        "length_plus_girth_limit": 130,
+        "shippable_at_all": "yes — 91 in is inside the USPS Ground Advantage 130 in limit"
+      }
+    ],
     "to_measure": [
       {
-        "what": "The LARGEST box or mailer currently used for orders",
-        "need": "inside length, width and depth in inches",
-        "why": "One number decides the whole question. At or under 1 cu ft (1728 cu in) and 22 in a side, every rate in the table is exactly right and none of the 26 outstanding quotes needs different dimensions.",
+        "what": "The ORDINARY box or mailer — the one most orders actually go out in",
+        "need": "INTERIOR length, width and depth in inches",
+        "why": "This is now the critical unknown. The large box is settled and excluded; what the table rests on is the everyday one. At or under 1 cu ft and 22 in a side, every rate in the table is exactly right and the 26 outstanding quotes stand as planned.",
         "priority": 1
       },
       {
-        "what": "The smallest mailer used, for single-item orders",
-        "need": "inside length, width and depth in inches",
-        "why": "Confirms the sub-1-lb and 2 lb bands are not being quoted against a box the shop would never use. Lower stakes: a small box cannot trigger any of the thresholds.",
+        "what": "Whether 27 x 15 x 17 is interior or exterior",
+        "need": "one interior measurement of that box",
+        "why": "Low stakes — it is 4x over the threshold either way — but it decides how many units actually fit, which feeds the split question below.",
         "priority": 2
       },
       {
-        "what": "Volume of one unit as packed, per category — shirts, belts, shorts, bags, shoes",
-        "need": "the packed dimensions of a single unit, or simply how many fit in the largest box",
-        "why": "Determines which orders need a bigger box or a second parcel. Cannot be derived: it depends on whether shoes ship in their own boxes and how tightly tees fold.",
+        "what": "How many units of each category fit the ORDINARY box",
+        "need": "a count per category: shirts, belts, shorts, bags, shoes",
+        "why": "Decides which orders need the large box, and therefore which orders the table must refuse rather than quote. Cannot be derived — it depends on whether shoes ship in their own boxes and how tightly tees fold.",
         "priority": 3
+      },
+      {
+        "what": "A real weight for any hoodie stock, if it returns",
+        "need": "one unit on a kitchen scale, in ounces",
+        "why": "Hoodies are not a category in products.json. 16 units at an estimated 35 lb implies roughly 35 oz each, but that is arithmetic on an estimate, not a weight. Without a CATEGORY_WEIGHT_OZ entry in BOTH script.js and db/orders.py a new category bills at the 8 oz fallback — the exact bug that billed every bag at 8 oz instead of 32.",
+        "priority": 4
       }
-    ]
+    ],
+    "what_the_large_box_establishes": "That orders needing it exist, and that they are outside the table by a wide margin rather than marginally. That is useful: it draws the line. The table prices orders that fit the ordinary box; anything needing the large one is manual, and the checkout must refuse to quote it rather than guess — which the 31 lb ceiling already does for weight, and which the priority-3 count will pin down for volume."
   },
   "multi_package": {
     "supported": false,

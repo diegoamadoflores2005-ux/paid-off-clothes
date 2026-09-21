@@ -711,10 +711,14 @@ def packaging_problem(rates=None):
     """
     rates = load_rates() if rates is None else rates
     pack = rates.get("packaging") or {}
-    boxes = [b for b in (pack.get("boxes") or []) if b.get("verified")]
+    # Only boxes the table is meant to price. A box marked `manual` is recorded so its existence
+    # is known — and so nobody re-derives it later — but it is deliberately outside the table:
+    # an order needing it exceeds what a weight-indexed ladder can express and wants a person.
+    boxes = [b for b in (pack.get("boxes") or [])
+             if b.get("verified") and b.get("use", "table") == "table"]
     if not boxes:
-        return ("no measured box on file — every rate assumes the real parcel stays under 1 cu ft, "
-                "and nothing has confirmed that")
+        return ("no measured table box on file — every rate assumes the real parcel stays under "
+                "1 cu ft, and nothing has confirmed that")
     ceiling = max_quotable_oz(rates)
     if ceiling is None:
         return None
