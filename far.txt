@@ -1,0 +1,25 @@
+# far column — zone 8, the dearest in that group, so one price covers zones 7 and 8.
+# Fill each ? with the USPS Ground Advantage price, keeping the Cubic line if one is shown.
+# Make sure the weight field and the price are both visible in each screenshot.
+#
+#   python3 tools/record_quote.py --session far.txt
+#   python3 tools/record_quote.py --session far.txt --record
+#
+# If 1 lb comes back ABOVE 2 lb again, that is not an error — the tariff inverts there at zone 6.
+# Record it on its own with:
+#   python3 tools/record_quote.py --dest 10001 --oz 16 --box 12x12x11 \
+#     --line "USPS/Ground Advantage/<price>" --anomaly "weight and price both visible" --record
+
+dest 10001
+box 12x12x11
+
+8    USPS/Ground Advantage/?
+16   USPS/Ground Advantage/?
+32   USPS/Ground Advantage/?
+48   USPS/Ground Advantage/?
+64   USPS/Ground Advantage/?
+80   USPS/Ground Advantage/?
+96   USPS/Ground Advantage/?
+112  USPS/Ground Advantage/?
+128  USPS/Ground Advantage/?
+144  USPS/Ground Advantage/?

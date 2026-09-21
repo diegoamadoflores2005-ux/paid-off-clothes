@@ -433,6 +433,23 @@ its dearest tier while staying under the 1728 cu in dimensional-weight threshold
 length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
 revealing it.
 
+**The tariff is NOT monotonic, and that is verified, not a bad quote.** At zone 6 the 1 lb rate is
+$9.24 while 2 lb is $8.17 — both read off the screen with the weight field visible. USPS's published
+ladder never inverts (zero non-monotonic pairs across 100 rows of the rate sheet), but every visible
+row there is 21 lb or heavier; 1–20 lb is redacted, and those rows carry Pirate Ship's
+below-Commercial pricing. The discount is uneven between bands — 22.8% off at sub-1-lb against 4.0%
+at 1 lb — and a non-uniform discount on a monotonic list price inverts adjacent bands. It is a
+negotiated-rate artefact, and it is real. **My monotonicity rule was an assumption treated as a law
+and it rejected a correct quote three times.** It is now an acknowledged-exception rule: an inversion
+is still an error by default, since it is almost always a bad quote, but a verified pair goes in
+`verified_anomalies` with its evidence — `record_quote.py --anomaly "<evidence>"` writes both.
+
+**`zone_rate_cents()` charges the CHEAPEST rate at or above the parcel's band**, not its own band's.
+A shop may always declare a heavier weight than it ships, so the true cost of a 1 lb parcel to
+zone 6 is the 2 lb rate of $8.17. That is the real cost *and* the cheapest honest price for the
+buyer, and it makes the **charged** ladder monotonic even where the tariff is not. Operationally:
+when buying that label, declare 2 lb — $1.07 saved per parcel in that band.
+
 **A band must lie inside the bracket its filled neighbours impose**, and `record_quote.py` says so
 in those terms. Monotonicity catches the same faults but reports them as "band X is cheaper than
 band Y", which names one of the two and leaves you to work out which. A bracket is actionable: the

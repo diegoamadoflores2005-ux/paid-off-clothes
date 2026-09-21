@@ -681,11 +681,22 @@ def rate_table_problems(rates=None):
             cell = ((table.get(section) or {}).get(key) or {}).get(group)
             if cell is not None:
                 seen.append((lb, key, float(cell)))
+        acknowledged = {tuple(a) for a in (rates.get("verified_anomalies") or [])
+                        if isinstance(a, list) and len(a) == 3}
         for (lb_a, key_a, price_a), (lb_b, key_b, price_b) in zip(seen, seen[1:]):
-            if price_b < price_a:
-                problems.append(
-                    f"{group}: {key_b} lb at ${price_b:.2f} is cheaper than {key_a} lb at "
-                    f"${price_a:.2f} — postage cannot fall as weight rises on one service")
+            if price_b >= price_a:
+                continue
+            # An inversion is almost always a bad quote, so it stays an error by default. But the
+            # tariff really can invert where the discount is uneven between bands, and that has now
+            # been verified at 1 lb / 2 lb zone 6. An acknowledged pair is listed explicitly in
+            # verified_anomalies rather than the rule being weakened for everything.
+            if (group, key_a, key_b) in acknowledged:
+                continue
+            problems.append(
+                f"{group}: {key_b} lb at ${price_b:.2f} is cheaper than {key_a} lb at "
+                f"${price_a:.2f}. Postage normally rises with weight, so this is a bad quote "
+                f"unless both figures are verified — if they are, add [\"{group}\", \"{key_a}\", "
+                f"\"{key_b}\"] to verified_anomalies with the evidence.")
         over = (table.get("over_max") or {}).get(group)
         if over is not None and seen and float(over) < seen[-1][2]:
             problems.append(
@@ -840,24 +851,35 @@ def table_bands(table):
 
 
 def zone_rate_cents(oz, group, table):
-    """What this parcel is charged in one zone group: its own band, or the next one quoted above it.
+    """The CHEAPEST rate at or above this parcel's band — not necessarily its own band's rate.
 
-    The table is a set of quotes at particular pounds, not a complete ladder — 1, 10, 12, 14 and 15
-    lb have no row. A parcel landing on an unquoted pound still has to be charged something, and the
-    only safe something is the next band UP, because USPS itself bills at the rounded-up pound.
+    Two things make that the right answer rather than a shortcut.
 
-    This used to drop straight to over_max, which is the fallback for parcels heavier than anything
-    in the table — the most expensive cell there is. So a 10 lb order paid the heaviest-order price
-    while an 11 lb order paid the 11 lb rate, and a parcel of exactly 16.0 oz paid it too. Both
-    inversions are the sort a customer notices and nobody else does.
+    First, the table is a set of quotes at particular pounds, not a complete ladder: 10, 12, 14 and
+    15 lb have no row. A parcel landing on an unquoted pound still has to be charged something, and
+    the only safe something is a band above it, because USPS bills at the rounded-up pound. (This
+    used to drop straight to over_max — the fallback for parcels heavier than the whole table, and
+    the dearest cell in it — so a 10 lb order paid more than an 11 lb one.)
+
+    Second, and this is why it is a MINIMUM rather than the first match: the tariff itself is not
+    monotonic. Pirate Ship's below-Commercial discount varies sharply by band — 22.8% off at
+    sub-1-lb against 4.0% off at 1 lb, both verified — and a non-uniform discount on a monotonic
+    list price can invert adjacent bands. At zone 6 it does: 1 lb is $9.24 while 2 lb is $8.17.
+    A shop may always DECLARE a heavier weight than it ships, paying for capacity it does not use,
+    so the real cost of a 1 lb parcel there is the 2 lb rate. Taking the running minimum charges
+    that, which is both the true cost and the cheapest honest price for the buyer — and it makes
+    the CHARGED ladder monotonic even where the tariff is not.
     """
     want_lb = 0 if band_for_oz(oz) == "sub" else int(band_for_oz(oz))
+    best = None
     for lb, section, key in table_bands(table):
         if lb < want_lb:
             continue
         cell = ((table.get(section) or {}).get(key) or {}).get(group)
-        if cell is not None:
-            return round(float(cell) * 100)
+        if cell is not None and (best is None or float(cell) < best):
+            best = float(cell)
+    if best is not None:
+        return round(best * 100)
     over = (table.get("over_max") or {}).get(group)
     return None if over is None else round(float(over) * 100)
 

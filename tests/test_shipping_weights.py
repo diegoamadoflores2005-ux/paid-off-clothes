@@ -1006,6 +1006,65 @@ class TestQuoteValidator(unittest.TestCase):
         self.assertTrue(any("break the ladder" in p for p in verdicts[1]),
                         "the 3 lb row must fail against the 2 lb row staged before it")
 
+    # ---- a tariff that really does invert --------------------------------------------------------
+    def test_an_acknowledged_inversion_stops_being_a_problem(self):
+        """Pirate Ship's discount is uneven between bands, so the tariff itself can invert.
+
+        22.8% off at sub-1-lb against 4.0% off at 1 lb, both verified — apply that unevenly to a
+        monotonic list price and adjacent bands cross. At zone 6 they do: 1 lb $9.24, 2 lb $8.17.
+        An inversion stays an error by default, because it is almost always a bad quote; the
+        exception is listed explicitly rather than the rule being switched off.
+        """
+        orders = load_orders()
+        rates = self._rates_with_inversion()
+        self.assertTrue(orders.rate_table_problems(rates), "unacknowledged, it must be reported")
+        rates["verified_anomalies"] = [["near", "1", "2"]]
+        self.assertEqual(orders.rate_table_problems(rates), [],
+                         "acknowledged, it must be accepted")
+
+    def test_acknowledging_one_pair_does_not_excuse_another(self):
+        orders = load_orders()
+        rates = self._rates_with_inversion()
+        rates["rate_table"]["core"]["4"] = {"near": 1.00, "mid": None, "far": None}
+        rates["verified_anomalies"] = [["near", "1", "2"]]
+        self.assertTrue(orders.rate_table_problems(rates),
+                        "the 3 lb -> 4 lb inversion is not the one that was acknowledged")
+
+    def test_a_parcel_is_charged_the_cheapest_rate_at_or_above_its_band(self):
+        """A shop may declare a heavier weight than it ships, so the 1 lb parcel pays the 2 lb rate.
+
+        That is the real cost and the cheapest honest price for the buyer, and it makes the CHARGED
+        ladder monotonic even where the tariff is not.
+        """
+        orders = load_orders()
+        table = self._rates_with_inversion()["rate_table"]
+        self.assertEqual(orders.zone_rate_cents(16, "near", table), 817,
+                         "a 1 lb parcel must be charged the 2 lb rate, not its own $9.24")
+        self.assertEqual(orders.zone_rate_cents(32, "near", table), 817)
+        self.assertEqual(orders.zone_rate_cents(8, "near", table), 607,
+                         "sub-1-lb is already the cheapest at or above itself")
+
+    def test_the_charged_ladder_never_falls_as_weight_rises(self):
+        """The property that matters to a buyer, and it holds by construction now."""
+        orders = load_orders()
+        table = self._rates_with_inversion()["rate_table"]
+        charged = [orders.zone_rate_cents(oz, "near", table) for oz in (8, 16, 32, 48)]
+        self.assertEqual(charged, sorted(charged))
+
+    def _rates_with_inversion(self):
+        bands = ["sub", "1"] + [str(b) for b in range(2, 10)]
+        rates = {
+            "origin_zip": "85641", "carrier": "USPS", "service": "Ground Advantage",
+            "rate_basis": "weight",
+            "zone_groups": {"near": {"zones": [1, 2, 3, 4]}},
+            "zone_map": {"902": 4},
+            "rate_table": {"core": {b: {"near": None, "mid": None, "far": None} for b in bands},
+                           "heavy": {}, "over_max": {"near": None, "mid": None, "far": None}},
+        }
+        for band, price in (("sub", 6.07), ("1", 9.24), ("2", 8.17), ("3", 9.41)):
+            rates["rate_table"]["core"][band]["near"] = price
+        return rates
+
     # ---- the bracket its neighbours impose --------------------------------------------------------
     def test_a_band_must_lie_between_its_filled_neighbours(self):
         """The 1 lb zone 6 case, and the clearest statement of why $9.24 was impossible.

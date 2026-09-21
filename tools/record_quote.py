@@ -106,6 +106,7 @@ def box_facts(dims, zone):
 def check(args, rates, orders):
     """-> (problems, notes, chosen_line, cell_key). Problems mean nothing gets recorded."""
     problems, notes = [], []
+    anomaly = getattr(args, "anomaly", None)
     dims = parse_box(args.box)
     lines = [parse_line(t) for t in args.line]
     band = orders.band_for_oz(args.oz)
@@ -253,16 +254,25 @@ def check(args, rates, orders):
             bounds.append(f"at least ${lo:.2f} (the {below[1]} lb rate)")
         if above:
             bounds.append(f"at most ${hi:.2f} (the {above[1]} lb rate)")
-        problems.append(
-            f"band {band} must be " + " and ".join(bounds) +
-            f", and ${price:.2f} is outside that. Postage rises with weight, so the neighbours "
-            f"already filled leave no room for this figure — whatever it turns out to be.")
+        msg = (f"band {band} must be " + " and ".join(bounds) +
+               f", and ${price:.2f} is outside that. Postage normally rises with weight, so the "
+               f"neighbours already filled leave no room for this figure.")
+        if anomaly:
+            notes.append(f"BRACKET OVERRIDDEN — {msg}")
+            notes.append(f"  accepted as a verified anomaly: {anomaly}")
+        else:
+            problems.append(msg + " If the weight and price were both read off the screen and it "
+                                  "still reads this way, pass --anomaly with the evidence.")
 
     # Monotonicity, checked against the real neighbours rather than after the fact.
     probe = json.loads(json.dumps(rates))
     probe["rate_table"][section][band][group] = chosen["price_usd"]
     for p in orders.rate_table_problems(probe):
-        if group in p:
+        if group not in p:
+            continue
+        if anomaly:
+            notes.append(f"LADDER INVERSION ACCEPTED — {p}")
+        else:
             problems.append(f"it would break the ladder — {p}")
 
     return problems, notes, chosen, cell
@@ -333,7 +343,7 @@ def cmd_session(path, rates, orders, write):
     probe = json.loads(json.dumps(rates))   # rows are checked against each other, not just the file
     for row in rows:
         args = argparse.Namespace(dest=row["dest"], oz=row["oz"], box=row["box"],
-                                  line=row["line"], record=False, next=False)
+                                  line=row["line"], record=False, next=False, anomaly=None)
         problems, _notes, chosen, cell = check(args, probe, orders)
         label = f"line {row['lineno']}: {row['oz']:g} oz -> {row['dest']}"
         if problems:
@@ -469,6 +479,10 @@ def main():
     ap.add_argument("--line", action="append", default=[],
                     help='one service line: "CARRIER/SERVICE/PRICE". Repeat for every line shown.')
     ap.add_argument("--record", action="store_true", help="write it, if every check passes")
+    ap.add_argument("--anomaly", metavar="REASON",
+                    help="accept a verified quote that inverts the ladder, recording REASON. The "
+                         "tariff really can invert where the discount is uneven between bands. Use "
+                         "ONLY when the weight and price were both read off the screen.")
     ap.add_argument("--session", help="a file (or - for stdin) holding a whole quoting session; "
                                       "every row is validated and all are written or none")
     args = ap.parse_args()
@@ -502,7 +516,23 @@ def main():
 
     section, band, group = cell.split(".")
     rates["rate_table"][section][band][group] = chosen["price_usd"]
-    rates.setdefault("cell_provenance", {})[cell] = provenance_for(chosen, args, rates, orders)
+    prov = provenance_for(chosen, args, rates, orders)
+    if getattr(args, "anomaly", None):
+        prov["anomaly"] = args.anomaly
+        # Record the inverted PAIR so rate_table_problems stops flagging just this one, rather
+        # than the monotonicity rule being switched off everywhere.
+        table = rates.get("rate_table") or {}
+        want_lb = 0 if band == "sub" else int(band)
+        for lb, sec, key in orders.table_bands(table):
+            neighbour = ((table.get(sec) or {}).get(key) or {}).get(group)
+            if neighbour is None or key == band:
+                continue
+            if lb > want_lb and float(neighbour) < chosen["price_usd"]:
+                pair = [group, band, key]
+                if pair not in rates.setdefault("verified_anomalies", []):
+                    rates["verified_anomalies"].append(pair)
+                break
+    rates.setdefault("cell_provenance", {})[cell] = prov
     with open(RATES, "w", encoding="utf-8") as fh:
         json.dump(rates, fh, indent=2, ensure_ascii=False)
         fh.write("\n")

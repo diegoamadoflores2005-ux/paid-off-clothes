@@ -186,7 +186,7 @@
       },
       "1": {
         "near": null,
-        "mid": null,
+        "mid": 9.24,
         "far": null,
         "territories": null
       },
@@ -216,25 +216,25 @@
       },
       "6": {
         "near": null,
-        "mid": null,
+        "mid": 13.99,
         "far": null,
         "territories": null
       },
       "7": {
         "near": null,
-        "mid": null,
+        "mid": 14.62,
         "far": null,
         "territories": null
       },
       "8": {
         "near": null,
-        "mid": null,
+        "mid": 15.19,
         "far": null,
         "territories": null
       },
       "9": {
         "near": null,
-        "mid": null,
+        "mid": 15.84,
         "far": null,
         "territories": null
       }
@@ -1722,6 +1722,112 @@
         }
       ],
       "evidence": "Quoted at 64 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.1.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 9.24,
+      "dest_zip": "35401",
+      "oz": 16.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 9.24
+        }
+      ],
+      "evidence": "Quoted at 16 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written.",
+      "anomaly": "Weight field and price both visible in the screenshot, confirmed twice. The account's discount is uneven between bands — 22.8% off at sub-1-lb against 4.0% off at 1 lb — and a non-uniform discount on a monotonic list price inverts adjacent bands. USPS's own published ladder shows no inversions, so this is a negotiated-rate artefact, not a USPS one."
+    },
+    "core.6.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 13.99,
+      "dest_zip": "35401",
+      "oz": 96.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 13.99
+        }
+      ],
+      "evidence": "Quoted at 96 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.7.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 14.62,
+      "dest_zip": "35401",
+      "oz": 112.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 14.62
+        }
+      ],
+      "evidence": "Quoted at 112 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.8.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 15.19,
+      "dest_zip": "35401",
+      "oz": 128.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 15.19
+        }
+      ],
+      "evidence": "Quoted at 128 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.9.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 15.84,
+      "dest_zip": "35401",
+      "oz": 144.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 15.84
+        }
+      ],
+      "evidence": "Quoted at 144 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
     }
   },
   "quarantined_quotes": [
@@ -2086,7 +2192,8 @@
       "dest_zip": "35401",
       "reported_as": "1 lb",
       "why_held": "Outside the bracket its neighbours impose: the 1 lb rate must lie in [$6.07, $8.17] and $9.24 does not. Not a shifted row either — 3 lb is $9.41 and 4 lb is $10.00, so it matches no band in this column. Cause unknown and not needed.",
-      "weight_field_visible": false
+      "weight_field_visible": false,
+      "resolution": "RESOLVED and recorded. Re-verified with the weight field visible; the tariff really does invert here. See tariff_is_not_monotonic."
     },
     "mid_10lb": {
       "price_usd": 16.51,
@@ -2099,27 +2206,87 @@
       "price_usd": 13.99,
       "dest_zip": "35401",
       "reported_as": "6 lb",
-      "weight_field_visible": false
+      "weight_field_visible": false,
+      "resolution": "Recorded at the owner's explicit instruction. The weight field was not visible, which is noted in each cell's provenance and stays on the record; the owner reviewed that and accepted them. They rise smoothly and continue the ladder, and nothing contradicts them."
     },
     "mid_7lb": {
       "price_usd": 14.62,
       "dest_zip": "35401",
       "reported_as": "7 lb",
-      "weight_field_visible": false
+      "weight_field_visible": false,
+      "resolution": "Recorded at the owner's explicit instruction. The weight field was not visible, which is noted in each cell's provenance and stays on the record; the owner reviewed that and accepted them. They rise smoothly and continue the ladder, and nothing contradicts them."
     },
     "mid_8lb": {
       "price_usd": 15.19,
       "dest_zip": "35401",
       "reported_as": "8 lb",
-      "weight_field_visible": false
+      "weight_field_visible": false,
+      "resolution": "Recorded at the owner's explicit instruction. The weight field was not visible, which is noted in each cell's provenance and stays on the record; the owner reviewed that and accepted them. They rise smoothly and continue the ladder, and nothing contradicts them."
     },
     "mid_9lb": {
       "price_usd": 15.84,
       "dest_zip": "35401",
       "reported_as": "9 lb",
-      "weight_field_visible": false
+      "weight_field_visible": false,
+      "resolution": "Recorded at the owner's explicit instruction. The weight field was not visible, which is noted in each cell's provenance and stays on the record; the owner reviewed that and accepted them. They rise smoothly and continue the ladder, and nothing contradicts them."
     },
     "_why_the_six_to_nine_block_is_held": "All four rise smoothly and continue the ladder, and nothing contradicts any of them. They are held purely on provenance. The risk they carry is invisible from the numbers: if the block were shifted by one band — the '6 lb' figure really 7 lb, and so on — it would STILL rise smoothly and still follow $10.35, and no check could tell. That is exactly what a visible weight field rules out, and it is the condition under which two figures have already been wrong. Four cells is not worth carrying that risk to go live on."
   },
-  "weight_field_rule": "A quote whose weight field was not visible on screen is not recorded, however plausible the price. Two figures have now been wrong in exactly that condition — $7.03 reported as 2 lb but really 5 lb, and $9.24 reported as 1 lb but really 3 or 4 lb — and both times the price looked entirely reasonable in isolation. The screenshot has to show the weight and the price together."
+  "weight_field_rule": "A quote whose weight field was not visible on screen is not recorded, however plausible the price. Two figures have now been wrong in exactly that condition — $7.03 reported as 2 lb but really 5 lb, and $9.24 reported as 1 lb but really 3 or 4 lb — and both times the price looked entirely reasonable in isolation. The screenshot has to show the weight and the price together.",
+  "verified_anomalies": [
+    [
+      "mid",
+      "1",
+      "2"
+    ]
+  ],
+  "tariff_is_not_monotonic": {
+    "established_on": "2026-09-21",
+    "finding": "This account's tariff genuinely inverts at 1 lb / 2 lb, zone 6: $9.24 against $8.17.",
+    "evidence": [
+      "Both figures verified with the weight field and price visible on screen; the 1 lb one confirmed twice.",
+      "USPS's PUBLISHED ladder does not invert — zero non-monotonic pairs across 50 rows of Ground Advantage and 50 of Priority in the rate sheet. But every visible row is 21 lb or heavier; 1-20 lb is redacted, and those are exactly the rows carrying Pirate Ship's below-Commercial pricing.",
+      "The discount is demonstrably uneven between bands: 22.8% off at sub-1-lb zone 6 against 4.0% off at 1 lb. A non-uniform discount applied to a monotonic list price inverts adjacent bands, and 1 lb is the least-discounted band seen anywhere — precisely where an inversion would surface.",
+      "So it is a negotiated-rate artefact, not a USPS one, and it is real."
+    ],
+    "what_was_wrong": "My monotonicity rule was a modelling assumption treated as a law. It rejected a correct quote three times. It is now an acknowledged-exception rule: an inversion is still an error by default, because it is almost always a bad quote, but a verified pair goes in verified_anomalies with its evidence rather than the rule being weakened everywhere.",
+    "how_it_is_priced": "zone_rate_cents() charges the CHEAPEST rate at or above the parcel's band. A shop may always declare a heavier weight than it ships, paying for capacity it does not use, so the true cost of a 1 lb parcel to zone 6 is the 2 lb rate of $8.17, not $9.24. That is both the real cost and the cheapest honest price for the buyer, and it makes the CHARGED ladder monotonic even where the tariff is not.",
+    "operational_note": "When buying that label, declare 2 lb. The parcel weighs less; you are simply paying the cheaper of two prices USPS offers you. $1.07 per parcel in this band."
+  },
+  "next_column": {
+    "group": "far",
+    "dest_zip": "10001",
+    "zone": 8,
+    "why_this_zip": "far spans zones 7-8 and 10001 is zone 8, the group's dearest — so one price covers the whole group without shipping any zone 8 order below cost.",
+    "box": [
+      12,
+      12,
+      11
+    ],
+    "bands_needed": [
+      "sub",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9"
+    ],
+    "oz_to_enter": {
+      "sub": 8,
+      "1": 16,
+      "2": 32,
+      "3": 48,
+      "4": 64,
+      "5": 80,
+      "6": 96,
+      "7": 112,
+      "8": 128,
+      "9": 144
+    },
+    "watch_for": "far is two zones further than mid, so expect every figure above the mid column. A 1 lb / 2 lb inversion may well repeat — if it does, it is not an error, and --anomaly records it."
+  }
 }
