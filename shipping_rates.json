@@ -2397,7 +2397,27 @@
         "priority": 4
       }
     ],
-    "what_the_large_box_establishes": "That orders needing it exist, and that they are outside the table by a wide margin rather than marginally. That is useful: it draws the line. The table prices orders that fit the ordinary box; anything needing the large one is manual, and the checkout must refuse to quote it rather than guess — which the 31 lb ceiling already does for weight, and which the priority-3 count will pin down for volume."
+    "what_the_large_box_establishes": "That orders needing it exist, and that they are outside the table by a wide margin rather than marginally. That is useful: it draws the line. The table prices orders that fit the ordinary box; anything needing the large one is manual, and the checkout must refuse to quote it rather than guess — which the 31 lb ceiling already does for weight, and which the priority-3 count will pin down for volume.",
+    "policy": {
+      "decided_on": "2026-09-21",
+      "model": "two boxes",
+      "everyday": "The smaller box, used for ordinary orders. The table prices these. Its dimensions are NOT yet supplied — the owner will confirm them before shipping is finalised, and nothing is assumed in the meantime.",
+      "large": "27 x 15 x 17, bulk orders only. Outside the table by a wide margin: 3.98 cu ft crosses the dimensional-weight threshold 4x over, the $21 wall 2x over, and its 27 in side adds $4.50. Orders needing it are manual.",
+      "NOT_the_inventory_box": "20.5 x 15.5 x 10 (3,178 cu in) is the storage container at home and was explicitly stated not to be the customer mailer. It is not being treated as the everyday box. Recorded because the distinction matters: at 3,178 cu in the dimensional weight is 22.9 lb, so a 5-shirt order shipped in it would bill as 23 lb to zones 5-9 while the table charged the 3 lb rate — an undercharge of roughly eight bands.",
+      "the_test_it_must_pass": "A box keeps a band exact when its volume is at most max(1 cu ft, W x 139 cu in), staying under 2 cu ft and 22 in a side. The binding row is the lightest: a parcel under 12.4 lb is exact only up to 1 cu ft. So if ONE everyday box carries every order from a single tee upward, it must be 1,728 cu in or less. If light orders instead go in a small mailer, the everyday box may be larger — but then what is needed is the PAIRING of box to order size, which is a packing policy rather than a measurement.",
+      "max_exact_cu_in_by_band": {
+        "sub": 1728,
+        "2": 1728,
+        "3": 1728,
+        "5": 1728,
+        "6": 1728,
+        "9": 1728,
+        "13": 1807,
+        "20": 2780,
+        "31": 3456
+      },
+      "ceiling_may_need_lowering": "max_quotable_oz is 31 lb, chosen to clear the deepest advertised bulk tier. Once the everyday box's capacity is known the real ceiling may be lower — whatever weight still FITS that box. An order too big for it needs the large box, and the large box is manual."
+    }
   },
   "multi_package": {
     "supported": false,

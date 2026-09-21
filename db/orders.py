@@ -700,6 +700,27 @@ def parcel_surcharge_cents(cu_in, longest_in):
     return fee
 
 
+def max_exact_cu_in(actual_oz):
+    """The largest box that keeps the table's rate exactly right for a parcel of this weight.
+
+    Below 1 cu ft dimensions never matter, so that is the floor. Above it the parcel bills on
+    volume/139, which only overtakes actual weight once the box is big relative to what is in it —
+    hence the max(). The 2 cu ft fee wall caps the whole thing, because past there $21 is added
+    regardless of weight.
+
+    The binding row is the lightest one: a parcel under 12.4 lb is exact only up to 1 cu ft. So a
+    single everyday box carrying every order from one tee upward must be 1,728 cu in or less.
+    """
+    return min(OVERSIZE_OVER_CU_IN, max(DIM_WEIGHT_OVER_CU_IN, float(actual_oz) / 16.0 * DIM_DIVISOR))
+
+
+def table_rate_is_exact(actual_oz, cu_in, longest_in, zone):
+    """Would the table's weight-based rate be the real cost for this parcel in this box?"""
+    if parcel_surcharge_cents(cu_in, longest_in):
+        return False
+    return billed_oz(actual_oz, cu_in, zone) <= float(actual_oz)
+
+
 def packaging_problem(rates=None):
     """Why this table's packaging cannot yet back its rates, or None.
 

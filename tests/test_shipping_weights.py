@@ -989,6 +989,46 @@ class TestPackagingAndDimensions(unittest.TestCase):
         self.assertFalse(large[0]["verified"])
         self.assertEqual(large[0]["use"], "manual")
 
+    def test_the_binding_constraint_is_the_lightest_parcel(self):
+        """A single everyday box carrying every order from one tee upward must be <= 1 cu ft.
+
+        Below 12.4 lb the dimensional weight of a 1 cu ft box already exceeds the parcel, so no
+        light band gets any headroom at all. Heavier bands do.
+        """
+        for oz in (8, 32, 48, 80, 96, 144):
+            with self.subTest(oz=oz):
+                self.assertEqual(self.orders.max_exact_cu_in(oz),
+                                 self.orders.DIM_WEIGHT_OVER_CU_IN)
+        self.assertGreater(self.orders.max_exact_cu_in(20 * 16),
+                           self.orders.DIM_WEIGHT_OVER_CU_IN, "20 lb has headroom")
+        self.assertEqual(self.orders.max_exact_cu_in(50 * 16), self.orders.OVERSIZE_OVER_CU_IN,
+                         "the 2 cu ft fee wall caps it however heavy the parcel")
+
+    def test_the_inventory_box_would_break_the_light_bands(self):
+        """20.5 x 15.5 x 10 is storage, not a mailer — and this is why that matters.
+
+        At 3,178 cu in its dimensional weight is 22.9 lb, so a 2 lb order shipped in it bills as
+        23 lb to zones 5-9 while the table charges the 2 lb rate.
+        """
+        self.assertFalse(self.orders.table_rate_is_exact(32, 3178, 20.5, 6))
+        self.assertTrue(self.orders.table_rate_is_exact(32, 3178, 20.5, 4),
+                        "near is zones 1-4, where dimensional weight never applies")
+        self.assertTrue(self.orders.table_rate_is_exact(32, 1584, 12, 6),
+                        "the 12x12x11 quoting box is exact at every zone")
+
+    def test_a_surcharged_box_is_never_exact(self):
+        self.assertFalse(self.orders.table_rate_is_exact(560, 6885, 27, 6))
+        self.assertFalse(self.orders.table_rate_is_exact(560, 6885, 27, 1),
+                         "the $21 and $4.50 fees apply in every zone, unlike dimensional weight")
+
+    def test_the_everyday_box_is_not_yet_supplied(self):
+        """Nothing is assumed while the owner confirms it."""
+        policy = self.orders.load_rates()["packaging"]["policy"]
+        self.assertIn("NOT yet supplied", policy["everyday"])
+        table_boxes = [b for b in self.orders.load_rates()["packaging"]["boxes"]
+                       if b.get("use", "table") == "table"]
+        self.assertEqual(table_boxes, [], "no box may stand in for the everyday one")
+
     def test_multi_package_is_declared_unsupported(self):
         """Recorded rather than silently absent: two parcels cost two labels."""
         self.assertFalse(self.orders.load_rates()["multi_package"]["supported"])
