@@ -386,6 +386,12 @@ destination's first three digits. USPS publishes the chart per origin; mileage o
 it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
 neighbouring zone's price.
 
+**Cubic does not take over the outer zones — that worry is refuted.** A model where Cubic wins
+from 2 lb up at zone 6 fitted the first three figures exactly, and predicted that every weight from
+2 to 20 lb in the test box would return the same $8.17. It did not: 5 lb came back $10.35 and 10 lb
+$16.51. The 12 × 12 × 11 box works at zone 6 as it does at zone 4, and the weight-based column is
+collectible for mid, far and territories after all.
+
 **Box size does not affect weight-based Ground Advantage pricing** — verified, not assumed: 2 lb
 to 90210 returned $6.03 in a 12x19x3 box (0.40 cu ft) and $6.03 in a 12x12x11 box (0.92 cu ft), two
 different Cubic tiers. So the weight-based columns can be quoted in any convenient box and need no
@@ -426,6 +432,12 @@ line, quote in a box as close to 1.0 cu ft as possible **without** exceeding it:
 its dearest tier while staying under the 1728 cu in dimensional-weight threshold and the 22 in
 length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
 revealing it.
+
+**A quote whose weight field was not visible on screen is never recorded**, however plausible the
+price looks. Two figures have now been wrong in exactly that condition — $7.03 reported as 2 lb but
+really the 5 lb rate, and $9.24 reported as 1 lb but really the 3 or 4 lb one — and both read as
+perfectly ordinary prices in isolation. Each was caught only because it landed on, or above, a band
+it could not belong to. The screenshot has to show the weight and the price together.
 
 **The discount off advertised is NOT uniform across bands.** The July 2026 change made sub-1-lb
 flat and cut it far harder than the pound bands, so a sub-1-lb cell sits ~22% below advertised while
