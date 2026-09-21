@@ -198,13 +198,13 @@
       },
       "3": {
         "near": 6.33,
-        "mid": null,
+        "mid": 9.41,
         "far": null,
         "territories": null
       },
       "4": {
         "near": 6.4,
-        "mid": null,
+        "mid": 10.0,
         "far": null,
         "territories": null
       },
@@ -1312,7 +1312,7 @@
         "$9.24 at 1 lb (2026-09-21, 35401, 12x12x11)",
         "$8.17 at 2 lb, same session — a HEAVIER parcel priced lower"
       ],
-      "status": "RESOLVED as a bad row — $9.24 is not the 1 lb rate; cell left empty",
+      "status": "CLOSED — $9.24 cannot be the 1 lb rate; cell left empty, cause unknown",
       "why_it_matters": [
         "Postage cannot fall as weight rises on one service, so one of the two is wrong.",
         "Two independent tests both point at the 1 lb figure, not the 2 lb one:",
@@ -1354,7 +1354,23 @@
         "Where it does fit: interpolating the confirmed 2 lb and 5 lb figures puts 3 lb near $8.90 and 4 lb near $9.62, so $9.24 is very likely the 3 lb or 4 lb rate entered as 1 lb. Against the verified zone 4 column it would be 1.460x at 3 lb, which sits between the 2 lb ratio of 1.355x and the 5 lb ratio of 1.472x. As a 1 lb figure it would have to undercut the 2 lb ratio, and it does not.",
         "This is the second weight-field slip in the same shape: the $7.03 'control test' was the 5 lb rate entered as 2 lb. Both times the weight field was not visible in the screenshot, and both times the figure landed squarely on another band's rate."
       ],
-      "cell_left_empty": "No 1 lb rate is recorded. The band is bounded between $6.07 and $8.17 by its neighbours, but a bound is not a quote and nothing is invented from it."
+      "cell_left_empty": "Still no 1 lb rate recorded. It is bounded to [$6.07, $8.17], and a bound is not a quote.",
+      "update_after_full_column": [
+        "My hypothesis that $9.24 was the 3 or 4 lb rate is REFUTED: 3 lb came back $9.41 and",
+        "4 lb $10.00. $9.24 is neither.",
+        "It sits between 2 lb ($8.17) and 3 lb ($9.41) and matches no band in this column, so",
+        "it is not a shifted row either. What it actually is remains unknown.",
+        "That does not matter for the table. The bracket settles it without any theory: the",
+        "1 lb rate must be at least the sub-1-lb rate ($6.07) and at most the 2 lb rate",
+        "($8.17), and $9.24 is outside that range.",
+        "Which of the pair to doubt is decided on provenance, not preference. Run it the other",
+        "way and, if 1 lb were $9.24, the 2 lb rate would have to lie in [$9.24, $9.41] — so",
+        "$8.17 would be wrong by $1.07. But $8.17 was collected with the weight field visible",
+        "and $9.24 was not, twice. The better-evidenced figure stands.",
+        "Weakly corroborating: the advertised ladder steps 22.5% from sub-1-lb to 1 lb at zone",
+        "6, which off $6.07 lands near $7.44 — inside the bracket. The account discount varies",
+        "by band, so this is a hint, not evidence."
+      ]
     }
   ],
   "zone_map_source": {
@@ -1664,6 +1680,48 @@
         }
       ],
       "evidence": "Quoted at 80 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.3.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 9.41,
+      "dest_zip": "35401",
+      "oz": 48.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 9.41
+        }
+      ],
+      "evidence": "Quoted at 48 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.4.mid": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 10.0,
+      "dest_zip": "35401",
+      "oz": 64.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 10.0
+        }
+      ],
+      "evidence": "Quoted at 64 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
     }
   },
   "quarantined_quotes": [
@@ -2027,7 +2085,7 @@
       "price_usd": 9.24,
       "dest_zip": "35401",
       "reported_as": "1 lb",
-      "why_held": "Above the 2 lb rate, so it cannot be the 1 lb rate. Probably 3 or 4 lb.",
+      "why_held": "Outside the bracket its neighbours impose: the 1 lb rate must lie in [$6.07, $8.17] and $9.24 does not. Not a shifted row either — 3 lb is $9.41 and 4 lb is $10.00, so it matches no band in this column. Cause unknown and not needed.",
       "weight_field_visible": false
     },
     "mid_10lb": {
@@ -2036,7 +2094,32 @@
       "reported_as": "10 lb",
       "why_held": "Consistent with the ladder and nothing contradicts it, but the weight field was not visible — the same condition that produced two wrong figures already. Held on provenance, not on arithmetic. It also has no row: core stops at 9 lb and heavy starts at 11.",
       "weight_field_visible": false
-    }
+    },
+    "mid_6lb": {
+      "price_usd": 13.99,
+      "dest_zip": "35401",
+      "reported_as": "6 lb",
+      "weight_field_visible": false
+    },
+    "mid_7lb": {
+      "price_usd": 14.62,
+      "dest_zip": "35401",
+      "reported_as": "7 lb",
+      "weight_field_visible": false
+    },
+    "mid_8lb": {
+      "price_usd": 15.19,
+      "dest_zip": "35401",
+      "reported_as": "8 lb",
+      "weight_field_visible": false
+    },
+    "mid_9lb": {
+      "price_usd": 15.84,
+      "dest_zip": "35401",
+      "reported_as": "9 lb",
+      "weight_field_visible": false
+    },
+    "_why_the_six_to_nine_block_is_held": "All four rise smoothly and continue the ladder, and nothing contradicts any of them. They are held purely on provenance. The risk they carry is invisible from the numbers: if the block were shifted by one band — the '6 lb' figure really 7 lb, and so on — it would STILL rise smoothly and still follow $10.35, and no check could tell. That is exactly what a visible weight field rules out, and it is the condition under which two figures have already been wrong. Four cells is not worth carrying that risk to go live on."
   },
   "weight_field_rule": "A quote whose weight field was not visible on screen is not recorded, however plausible the price. Two figures have now been wrong in exactly that condition — $7.03 reported as 2 lb but really 5 lb, and $9.24 reported as 1 lb but really 3 or 4 lb — and both times the price looked entirely reasonable in isolation. The screenshot has to show the weight and the price together."
 }

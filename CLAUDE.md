@@ -433,6 +433,13 @@ its dearest tier while staying under the 1728 cu in dimensional-weight threshold
 length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
 revealing it.
 
+**A band must lie inside the bracket its filled neighbours impose**, and `record_quote.py` says so
+in those terms. Monotonicity catches the same faults but reports them as "band X is cheaper than
+band Y", which names one of the two and leaves you to work out which. A bracket is actionable: the
+1 lb zone 6 rate must be at least $6.07 and at most $8.17, so $9.24 is impossible **whatever $9.24
+turns out to be** — no theory about its origin required. Which of a conflicting pair to doubt is
+then settled on provenance, not preference.
+
 **A quote whose weight field was not visible on screen is never recorded**, however plausible the
 price looks. Two figures have now been wrong in exactly that condition — $7.03 reported as 2 lb but
 really the 5 lb rate, and $9.24 reported as 1 lb but really the 3 or 4 lb one — and both read as

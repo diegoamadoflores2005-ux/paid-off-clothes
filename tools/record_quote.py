@@ -225,6 +225,39 @@ def check(args, rates, orders):
             f"so once it takes over, every band above returns the same figure. Check the weight "
             f"field said {args.oz:g} oz and check which service the line names.")
 
+    # The bracket its filled neighbours already impose on this band.
+    #
+    # Monotonicity catches the same faults, but it reports them as "band X is cheaper than band Y",
+    # which names one of the two bands and leaves you to work out which is wrong. A bracket says the
+    # actionable thing directly: this band must lie between these two figures, and yours does not.
+    # The 1 lb zone 6 case is exactly that — $6.07 below it and $8.17 above it leave no room for
+    # $9.24, whatever $9.24 turns out to be, and that holds without any theory about its origin.
+    want_lb = 0 if band == "sub" else int(band)
+    below = above = None
+    for lb, sec, key in orders.table_bands(table):
+        # NOT `cell` — that name already holds the cell key this function returns, and shadowing it
+        # made the tool report the cell as None while still passing every check.
+        neighbour = ((table.get(sec) or {}).get(key) or {}).get(group)
+        if neighbour is None or key == band:
+            continue
+        if lb < want_lb and (below is None or lb > below[0]):
+            below = (lb, key, float(neighbour))
+        if lb > want_lb and (above is None or lb < above[0]):
+            above = (lb, key, float(neighbour))
+    lo = below[2] if below else None
+    hi = above[2] if above else None
+    price = chosen["price_usd"]
+    if (lo is not None and price < lo) or (hi is not None and price > hi):
+        bounds = []
+        if below:
+            bounds.append(f"at least ${lo:.2f} (the {below[1]} lb rate)")
+        if above:
+            bounds.append(f"at most ${hi:.2f} (the {above[1]} lb rate)")
+        problems.append(
+            f"band {band} must be " + " and ".join(bounds) +
+            f", and ${price:.2f} is outside that. Postage rises with weight, so the neighbours "
+            f"already filled leave no room for this figure — whatever it turns out to be.")
+
     # Monotonicity, checked against the real neighbours rather than after the fact.
     probe = json.loads(json.dumps(rates))
     probe["rate_table"][section][band][group] = chosen["price_usd"]

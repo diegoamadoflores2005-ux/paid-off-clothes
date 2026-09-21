@@ -1006,6 +1006,41 @@ class TestQuoteValidator(unittest.TestCase):
         self.assertTrue(any("break the ladder" in p for p in verdicts[1]),
                         "the 3 lb row must fail against the 2 lb row staged before it")
 
+    # ---- the bracket its neighbours impose --------------------------------------------------------
+    def test_a_band_must_lie_between_its_filled_neighbours(self):
+        """The 1 lb zone 6 case, and the clearest statement of why $9.24 was impossible.
+
+        $6.07 below it and $8.17 above it leave no room for $9.24, whatever $9.24 turns out to be.
+        Monotonicity catches the same fault but reports it as "band X is cheaper than band Y",
+        naming one of the two and leaving you to work out which is wrong.
+        """
+        rates = self._rates()
+        rates["rate_table"]["core"]["sub"] = {"near": 6.07, "mid": None, "far": None}
+        rates["rate_table"]["core"]["2"] = {"near": 8.17, "mid": None, "far": None}
+        rates["rate_table"]["core"]["3"] = {"near": None, "mid": None, "far": None}
+        problems, _n, _c, _k = self._check(rates, oz=16, line=["USPS/Ground Advantage/9.24"])
+        msg = " ".join(problems)
+        self.assertIn("band 1 must be", msg)
+        self.assertIn("$6.07", msg)
+        self.assertIn("$8.17", msg)
+
+    def test_a_value_inside_the_bracket_passes(self):
+        rates = self._rates()
+        rates["rate_table"]["core"]["sub"] = {"near": 6.07, "mid": None, "far": None}
+        rates["rate_table"]["core"]["2"] = {"near": 8.17, "mid": None, "far": None}
+        rates["rate_table"]["core"]["3"] = {"near": None, "mid": None, "far": None}
+        problems, _n, _c, cell = self._check(rates, oz=16, line=["USPS/Ground Advantage/7.44"])
+        self.assertEqual(problems, [])
+        self.assertEqual(cell, "core.1.near",
+                         "the returned cell key must survive the bracket scan — a loop variable "
+                         "named `cell` shadowed it and reported None while every check passed")
+
+    def test_a_band_below_its_floor_is_refused(self):
+        rates = self._rates()
+        rates["rate_table"]["core"]["sub"] = {"near": 6.07, "mid": None, "far": None}
+        problems, _n, _c, _k = self._check(rates, oz=16, line=["USPS/Ground Advantage/5.00"])
+        self.assertTrue(any("at least $6.07" in p for p in problems))
+
     # ---- against the published advertised rate ---------------------------------------------------
     def test_a_quote_at_or_above_the_advertised_rate_is_refused(self):
         """This account prices below Commercial, so it cannot pay more than the advertised figure."""
