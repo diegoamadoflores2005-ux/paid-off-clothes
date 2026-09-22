@@ -215,7 +215,7 @@
         "territories": null
       },
       "6": {
-        "near": null,
+        "near": 9.56,
         "mid": 13.99,
         "far": 17.12,
         "territories": null
@@ -233,7 +233,7 @@
         "territories": null
       },
       "9": {
-        "near": null,
+        "near": 10.44,
         "mid": 15.84,
         "far": 19.95,
         "territories": null
@@ -1969,6 +1969,48 @@
         }
       ],
       "evidence": "Quoted at 144 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.6.near": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 9.56,
+      "dest_zip": "90210",
+      "oz": 96.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 9.56
+        }
+      ],
+      "evidence": "Quoted at 96 oz to 90210 (zone 4) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.9.near": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 10.44,
+      "dest_zip": "90210",
+      "oz": 144.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 10.44
+        }
+      ],
+      "evidence": "Quoted at 144 oz to 90210 (zone 4) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
     }
   },
   "quarantined_quotes": [

@@ -472,14 +472,50 @@ class TestZonePricing(unittest.TestCase):
         self.assertNotEqual(shipping, inventory.get("dims_in"),
                             "the storage container has been set as the shipping package")
 
-    def test_the_cubic_bands_are_still_empty(self):
-        """6-9 lb quoted $8.56 on Cubic, which bills on volume. Until the mailer is measured those
-        cells must stay empty — a volume price for an unmeasured box is not a price."""
+    def test_no_cell_is_filled_from_a_volume_priced_quote(self):
+        """The fault this replaces a narrower test with.
+
+        6-9 lb near was once quoted at a flat $8.56 on Ground Advantage CUBIC, which bills on the
+        box's volume rather than its weight, and 3-5 lb at a flat $5.93 the same way. A volume
+        price in a weight-indexed band is not a slightly-wrong price, it is a price for a different
+        variable, and one figure repeated across four pounds is its signature.
+
+        The old test froze those four cells empty. That was right while no box had been measured
+        and nothing checked rate basis per cell — but it is the wrong shape of guard now, and it
+        started failing on a genuine weight-based quote. What must hold is not "those cells are
+        empty" but "every filled cell is weight-based", which stays true as the table fills.
+        """
         orders = load_orders()
-        table = orders.load_rates()["rate_table"]["core"]
-        for band in ("6", "7", "8", "9"):
-            self.assertIsNone(table[band]["near"],
-                              f"{band} lb was filled from a Cubic quote without a measured box")
+        rates = orders.load_rates()
+        table = rates["rate_table"]
+        basis = rates["rate_basis"]
+
+        for section in ("core", "heavy"):
+            for band, row in (table.get(section) or {}).items():
+                for group, price in (row or {}).items():
+                    if price is None:
+                        continue
+                    entry = rates["cell_provenance"].get(f"{section}.{band}.{group}")
+                    self.assertIsNotNone(entry, f"{section}.{band}.{group} is filled with no "
+                                                f"provenance, so its rate basis is unknown")
+                    self.assertEqual(entry["rate_basis"], basis,
+                                     f"{section}.{band}.{group} was filled from a {entry['rate_basis']} "
+                                     f"quote; this table is indexed on {basis}")
+                    self.assertNotIn("Cubic", entry["service"],
+                                     f"{section}.{band}.{group} holds a Cubic price")
+
+    def test_the_original_cubic_figures_are_nowhere_in_the_table(self):
+        """Named explicitly, because they were reported as ordinary Ground Advantage prices and
+        read as perfectly plausible in isolation. Only their flatness across four pounds gave
+        them away."""
+        orders = load_orders()
+        table = orders.load_rates()["rate_table"]
+        for section in ("core", "heavy"):
+            for band, row in (table.get(section) or {}).items():
+                for group, price in (row or {}).items():
+                    self.assertNotIn(price, (8.56, 5.93),
+                                     f"{section}.{band}.{group} holds {price}, one of the flat "
+                                     f"cubic figures from the quarantined 12x19x3 session")
 
     def test_an_empty_zone_map_keeps_zone_pricing_off(self):
         rates = self._full_table()

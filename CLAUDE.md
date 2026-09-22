@@ -432,9 +432,9 @@ rather than trusting it.
 **How many more quotes are required to launch: zero.** `coverage_report()` ranks what is left by
 what it would buy rather than listing it as a wall, weighting each group by its share of the zone
 map. `python3 tools/shipping_gaps.py` prints it, and `record_quote.py --next` leads with the one
-session worth taking. Today: `mid` and `far` price to 9 lb, `near` to 5 lb, and `territories`
-(prefix 969, 0.1% of the map) to nothing. So 90.9% of mapped destinations price to 9 lb and 99.9%
-to at least 5 lb; anything heavier, or too bulky for the standard box, is quoted by hand.
+session worth taking. Today all three mainland groups — `near`, `mid` and `far`, 99.9% of mapped
+prefixes — price every band from a single piece to 9 lb. Only `territories` (prefix 969, 0.1%) has
+no rate. Anything above 9 lb, or too bulky for the standard box, is quoted by hand.
 
 **A cheaper line on the screen is not a cheaper rate for this table.** The 6 lb and 9 lb far quotes
 both had a UPS Ground Saver line under the USPS one — $17.02 against $17.12, and $19.85 against
@@ -459,6 +459,15 @@ cubic prices arrive without anyone asking for them — that is where seven quote
 across 3–9 lb came from. A volume-priced figure in a weight-indexed band is not a slightly-wrong
 price, it is a price for a different variable. See [SHIPPING.md](SHIPPING.md) for what that means for
 the whole table's shape.
+
+**"These cells must stay empty" is the wrong shape of guard.** A test froze near's 6-9 lb cells
+empty because they had once been filled from flat $8.56 Cubic quotes with no box measured. That was
+right at the time and it started failing the moment those bands were genuinely quoted — an
+emptiness assertion cannot tell a bad fill from a good one. The invariant that actually holds as
+the table fills is **every filled cell is weight-based**, checked per cell against the table's own
+`rate_basis` and service, with the original $8.56/$5.93 figures named separately so they can never
+reappear. The runtime enforces it independently of any test: a cell whose provenance says `volume`
+fails `cell_is_verified()` and the order falls up to the next honest band.
 
 **`rate_table_problems()` rejects a table that cannot be right**: postage falling as weight rises
 (the exact shape a cubic quote makes next to a weight-based one), a nearer zone costing more than a

@@ -1,0 +1,21 @@
+# near column — zone 4, the dearest zone in that group, so one price covers zones 1-4.
+#
+# near is only 8.9% of mapped prefixes but it is the home region: sub through 5 lb were quoted
+# in an earlier sitting to 90210. These two close the column to 9 lb, matching mid and far.
+#
+#   python3 tools/record_quote.py --session near.txt            # check, write nothing
+#   python3 tools/record_quote.py --session near.txt --record   # write, only if every row passes
+#
+# Box: 12x12x11, the standing quoting box from --next. The earlier near cells were taken in
+# 12x19x3 (0.40 cu ft). Both are under 1 cu ft and under 22 in a side, and box size does not
+# affect weight-based Ground Advantage pricing below 1 cu ft — verified, not assumed, by quoting
+# 2 lb to 90210 in both and getting $6.03 each time. So the two boxes are interchangeable here.
+#
+# The screens also carried UPS lines. Their figures were not supplied, so they are absent from
+# all_lines_seen rather than guessed at — see the note in the commit.
+
+dest 90210
+box 12x12x11
+
+96   USPS/Ground Advantage/9.56
+144  USPS/Ground Advantage/10.44
