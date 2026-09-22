@@ -432,9 +432,16 @@ rather than trusting it.
 **How many more quotes are required to launch: zero.** `coverage_report()` ranks what is left by
 what it would buy rather than listing it as a wall, weighting each group by its share of the zone
 map. `python3 tools/shipping_gaps.py` prints it, and `record_quote.py --next` leads with the one
-session worth taking. Today: `mid` prices to 9 lb, `near` and `far` to 5 lb, and `territories`
-(prefix 969, 0.1% of the map) to nothing. That covers a single piece up to about nine tees to
-99.9% of mapped destinations; anything heavier is quoted by hand.
+session worth taking. Today: `mid` and `far` price to 9 lb, `near` to 5 lb, and `territories`
+(prefix 969, 0.1% of the map) to nothing. So 90.9% of mapped destinations price to 9 lb and 99.9%
+to at least 5 lb; anything heavier, or too bulky for the standard box, is quoted by hand.
+
+**A cheaper line on the screen is not a cheaper rate for this table.** The 6 lb and 9 lb far quotes
+both had a UPS Ground Saver line under the USPS one — $17.02 against $17.12, and $19.85 against
+$19.95. Neither is usable: the table is one carrier, one service, one rate basis, and a UPS price
+filed as USPS is one of the faults `record_quote.py` exists to catch. The cheapest **eligible** line
+is what fills a cell, and the rest go into `all_lines_seen` so the choice is auditable — a row whose
+only line is ineligible is refused outright, naming the service it got and the one the table holds.
 
 **Do not use a real ZIP as a test fixture for "nothing can price this".** Nine tests used 10001 —
 a genuine far-zone ZIP that merely had no cell yet — and the moment the far column was quoted they

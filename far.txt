@@ -28,3 +28,10 @@ box 12x12x11
 32   USPS/Ground Advantage/10.15
 48   USPS/Ground Advantage/11.30
 80   USPS/Ground Advantage/14.27
+
+# Second sitting: 6 lb and 9 lb. UPS lines recorded because they were on the screen, not
+# because they are usable — this table is one carrier, one service, one rate basis, so a UPS
+# price is refused rather than filed. Recording them anyway is what lets the tool prove the
+# USPS figure is the one it took.
+96   UPS/Ground Saver/17.02, USPS/Ground Advantage/17.12
+144  UPS/Ground Saver/19.85, UPS/Ground/19.90, USPS/Ground Advantage/19.95

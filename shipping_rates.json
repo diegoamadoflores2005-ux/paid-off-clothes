@@ -217,7 +217,7 @@
       "6": {
         "near": null,
         "mid": 13.99,
-        "far": null,
+        "far": 17.12,
         "territories": null
       },
       "7": {
@@ -235,7 +235,7 @@
       "9": {
         "near": null,
         "mid": 15.84,
-        "far": null,
+        "far": 19.95,
         "territories": null
       }
     },
@@ -1912,6 +1912,63 @@
         }
       ],
       "evidence": "Quoted at 80 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.6.far": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 17.12,
+      "dest_zip": "10001",
+      "oz": 96.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "UPS",
+          "service": "Ground Saver",
+          "price_usd": 17.02
+        },
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 17.12
+        }
+      ],
+      "evidence": "Quoted at 96 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.9.far": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 19.95,
+      "dest_zip": "10001",
+      "oz": 144.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "UPS",
+          "service": "Ground Saver",
+          "price_usd": 19.85
+        },
+        {
+          "carrier": "UPS",
+          "service": "Ground",
+          "price_usd": 19.9
+        },
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 19.95
+        }
+      ],
+      "evidence": "Quoted at 144 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
     }
   },
   "quarantined_quotes": [
