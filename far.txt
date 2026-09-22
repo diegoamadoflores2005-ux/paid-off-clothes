@@ -24,7 +24,7 @@
 dest 10001
 box 12x12x11
 
-8    USPS/Ground Advantage/?
-32   USPS/Ground Advantage/?
-48   USPS/Ground Advantage/?
-80   USPS/Ground Advantage/?
+8    USPS/Ground Advantage/6.34
+32   USPS/Ground Advantage/10.15
+48   USPS/Ground Advantage/11.30
+80   USPS/Ground Advantage/14.27

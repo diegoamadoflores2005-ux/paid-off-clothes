@@ -109,6 +109,12 @@ def catalogue():
         return json.load(fh)
 
 
+# A three-digit prefix the USPS chart does not assign. Unlike a real ZIP in an unquoted column,
+# this one can NEVER become priceable — a zone is never inferred from distance — so it is a stable
+# fixture for "nothing can price this order".
+UNPRICEABLE_ZIP = "34399"
+
+
 class TestShippingWeights(unittest.TestCase):
     def setUp(self):
         self.js = js_weight_map()
@@ -1215,8 +1221,11 @@ class TestManualQuote(unittest.TestCase):
         """
         too_heavy = self.orders.shipping_quote([({"category": "Shoes"}, "10", 14)], "90210")
         too_bulky = self.orders.shipping_quote([({"category": "Shoes"}, "10", 3)], "90210")
-        # far has no verified cell at any band yet, so an ordinary basket there is unpriceable.
-        unquoted = self.orders.shipping_quote([({"category": "Shirts"}, "M", 5)], "10001")
+        # A prefix the chart does not assign, so it can never be priced — a zone is never inferred
+        # from distance. This used to be 10001, a real far ZIP that merely had no cell yet, and the
+        # test started passing for the wrong reason the moment that column was quoted.
+        self.assertIsNone(self.orders.zone_for_zip(UNPRICEABLE_ZIP))
+        unquoted = self.orders.shipping_quote([({"category": "Shirts"}, "M", 5)], UNPRICEABLE_ZIP)
 
         self.assertIn("lb", too_heavy["reason"])
         self.assertIn("box larger", too_bulky["reason"])
@@ -1773,15 +1782,21 @@ class TestCoverage(unittest.TestCase):
                           "and manual above it")
 
     def test_a_column_with_no_verified_cell_has_no_ceiling(self):
-        self.assertIsNone(self.orders.priced_ceiling_oz("far"))
-        self.assertIsNone(self.orders.zone_shipping_cents(8, "10001"))
+        """territories is the one column still empty. Asserted as a premise rather than assumed,
+        so this says "that column was quoted" if it is ever filled instead of just failing."""
+        empty = [r["group"] for r in self.orders.coverage_report()
+                 if r["priced_to_oz"] is None]
+        self.assertIn("territories", empty, "territories has been quoted; pick another empty group")
+        self.assertIsNone(self.orders.priced_ceiling_oz("territories"))
+        self.assertIsNone(self.orders.zone_shipping_cents(8, "96910"))
 
     def test_the_report_is_ranked_by_what_filling_it_would_buy(self):
+        """Most destinations first. Not the order the groups happen to be declared in — filling a
+        column nobody ships to is work that buys nothing."""
         rows = self.orders.coverage_report()
-        self.assertEqual(rows[0]["group"], "far",
-                         "over half the map and nothing priced — the one worth a session")
         shares = [r["share"] for r in rows]
         self.assertEqual(shares, sorted(shares, reverse=True))
+        self.assertEqual(rows[0]["group"], "far", "far is over half the map")
 
     def test_a_filled_column_reports_nothing_outstanding(self):
         rows = {r["group"]: r for r in self.orders.coverage_report()}

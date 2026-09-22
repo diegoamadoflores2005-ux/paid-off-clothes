@@ -432,10 +432,16 @@ rather than trusting it.
 **How many more quotes are required to launch: zero.** `coverage_report()` ranks what is left by
 what it would buy rather than listing it as a wall, weighting each group by its share of the zone
 map. `python3 tools/shipping_gaps.py` prints it, and `record_quote.py --next` leads with the one
-session worth taking. Today: `mid` prices to 9 lb, `near` to 5 lb, and `far` — 53% of all mapped
-prefixes — prices nothing, so every far order is quoted by hand. Four rows at zone 8 (`far.txt`)
-change that, and cover a single piece up to about ten, which is the shape of almost every order
-this shop takes.
+session worth taking. Today: `mid` prices to 9 lb, `near` and `far` to 5 lb, and `territories`
+(prefix 969, 0.1% of the map) to nothing. That covers a single piece up to about nine tees to
+99.9% of mapped destinations; anything heavier is quoted by hand.
+
+**Do not use a real ZIP as a test fixture for "nothing can price this".** Nine tests used 10001 —
+a genuine far-zone ZIP that merely had no cell yet — and the moment the far column was quoted they
+all started asserting a manual quote on an order the server had just priced. A fixture for
+unpriceable has to be **an unmapped three-digit prefix** (`UNPRICEABLE_ZIP = "34399"`), which can
+never become priceable because a zone is never inferred from distance, and each test asserts that
+premise so a change to the map says so rather than passing for the wrong reason.
 
 **The table is one carrier, one service, one rate basis.** `carrier` / `service` / `rate_basis` are
 separate fields because "USPS Ground Advantage" as a single string could not express the distinction

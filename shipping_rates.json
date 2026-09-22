@@ -181,7 +181,7 @@
       "sub": {
         "near": 5.83,
         "mid": 6.07,
-        "far": null,
+        "far": 6.34,
         "territories": null
       },
       "1": {
@@ -193,13 +193,13 @@
       "2": {
         "near": 6.03,
         "mid": 8.17,
-        "far": null,
+        "far": 10.15,
         "territories": null
       },
       "3": {
         "near": 6.33,
         "mid": 9.41,
-        "far": null,
+        "far": 11.3,
         "territories": null
       },
       "4": {
@@ -211,7 +211,7 @@
       "5": {
         "near": 7.03,
         "mid": 10.35,
-        "far": null,
+        "far": 14.27,
         "territories": null
       },
       "6": {
@@ -1828,6 +1828,90 @@
         }
       ],
       "evidence": "Quoted at 144 oz to 35401 (zone 6) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.sub.far": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 6.34,
+      "dest_zip": "10001",
+      "oz": 8.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 6.34
+        }
+      ],
+      "evidence": "Quoted at 8 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.2.far": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 10.15,
+      "dest_zip": "10001",
+      "oz": 32.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 10.15
+        }
+      ],
+      "evidence": "Quoted at 32 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.3.far": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 11.3,
+      "dest_zip": "10001",
+      "oz": 48.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 11.3
+        }
+      ],
+      "evidence": "Quoted at 48 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
+    },
+    "core.5.far": {
+      "verified": true,
+      "service": "Ground Advantage",
+      "rate_basis": "weight",
+      "price_usd": 14.27,
+      "dest_zip": "10001",
+      "oz": 80.0,
+      "dims_in": [
+        12.0,
+        12.0,
+        11.0
+      ],
+      "all_lines_seen": [
+        {
+          "carrier": "USPS",
+          "service": "Ground Advantage",
+          "price_usd": 14.27
+        }
+      ],
+      "evidence": "Quoted at 80 oz to 10001 (zone 8) in a 12x12x11 box, with every service line on the screen recorded. Validated by tools/record_quote.py against zone worst-case, package surcharges, service eligibility and ladder monotonicity before being written."
     }
   },
   "quarantined_quotes": [

@@ -900,14 +900,26 @@ class TestManualQuoteLifecycle(unittest.TestCase):
     of the catalogue forever, and nothing on the site would say why they were unbuyable.
     """
 
+    # A prefix the USPS chart does not assign. That is PERMANENTLY unpriceable by construction —
+    # "a zone is never inferred from distance", so no amount of quoting can ever fill it — which is
+    # what a fixture for "nothing can price this" has to be. These tests originally used 10001, a
+    # real far-zone ZIP that simply had no cell yet; the moment that column was quoted, nine of
+    # them started testing a priced order while still asserting a manual one.
+    UNPRICEABLE_ZIP = "34399"
+
+    def setUp(self):
+        self.assertIsNone(orders.zone_for_zip(self.UNPRICEABLE_ZIP),
+                          f"{self.UNPRICEABLE_ZIP} is now in the zone map; these tests need a "
+                          f"destination that cannot be priced, so pick another unmapped prefix")
+
     def _quote_requested(self, qty=3):
         """Place an order the table cannot price, and return (shirt, row)."""
         shirt = a_shirt(need=qty)
         status, out = post("/api/order", {
             "email": "quote@example.com",
             "idempotency_key": f"manual-{time.time()}-{qty}",
-            # far has no verified cell at any band, so an ordinary basket there is unpriceable.
-            "ship_to": {**SHIP_TO, "city": "New York", "state": "NY", "zip": "10001"},
+            "ship_to": {**SHIP_TO, "city": "Nowhere", "state": "FL",
+                        "zip": self.UNPRICEABLE_ZIP},
             "items": [{"id": shirt["id"], "name": shirt["name"], "size": shirt["size"],
                        "qty": qty}],
         })
@@ -990,7 +1002,8 @@ class TestManualQuoteLifecycle(unittest.TestCase):
         status, out = post("/api/checkout/session", {
             "email": "quote@example.com",
             "idempotency_key": f"manual-stripe-{time.time()}",
-            "ship_to": {**SHIP_TO, "city": "New York", "state": "NY", "zip": "10001"},
+            "ship_to": {**SHIP_TO, "city": "Nowhere", "state": "FL",
+                        "zip": self.UNPRICEABLE_ZIP},
             "items": [{"id": shirt["id"], "name": shirt["name"], "size": shirt["size"], "qty": 3}],
         })
         self.assertEqual(status, 409, out)
