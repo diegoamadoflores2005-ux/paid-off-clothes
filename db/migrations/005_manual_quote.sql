@@ -1,0 +1,11 @@
+-- Orders too heavy to price automatically.
+--
+-- shipping_cents is NOT NULL and this migration runner is additive and idempotent, so widening
+-- that column would mean a table rebuild that cannot run safely on every boot. Instead the order
+-- carries a flag: shipping_cents stays 0 to satisfy the constraint, and shipping_pending says that
+-- zero is a placeholder rather than free shipping.
+--
+-- EVERY read path must check this flag before showing a shipping figure. A 0 rendered as "$0.00"
+-- is the one wrong answer worse than no answer, and tests/test_shipping_weights.py fails if a
+-- display path reports a pending order as having zero shipping.
+ALTER TABLE orders ADD COLUMN shipping_pending INTEGER NOT NULL DEFAULT 0;

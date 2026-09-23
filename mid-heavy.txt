@@ -1,0 +1,14 @@
+# mid column — the three heavy bands still missing.
+# Nine bands under the agreed plan. Weight field AND price visible in every screenshot.
+#
+#   python3 tools/record_quote.py --session far.txt
+#   python3 tools/record_quote.py --session far.txt --record
+#
+# If 1 lb-style inversions appear, that is not an error — see --anomaly in the docs.
+
+dest 35401
+box 12x12x11
+
+208  USPS/Ground Advantage/?
+320  USPS/Ground Advantage/?
+496  USPS/Ground Advantage/?

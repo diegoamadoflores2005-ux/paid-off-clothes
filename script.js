@@ -92,12 +92,27 @@ function validateProducts(records) {
 // Per-item shipping weights. The workbook carries no weights, so these are estimates by category
 // — correct them against a kitchen scale before going live, since postage is billed on real weight.
 // A single product can override its category with a `weightOz` field.
+//
+// KEYS MUST MATCH `categories` IN products.json EXACTLY. They did not for a while: the rename in
+// ff30d32 turned "T-Shirts" into "Shirts" and "Backpacks" into "Bags", both lookups started missing,
+// and every shirt and bag quietly billed at the 8 oz fallback — trivial for a shirt, a real postage
+// loss on a 32 oz bag. Nothing failed loudly because a missing key is indistinguishable from
+// "no estimate yet". tests/test_shipping_weights.py now fails if a declared category has no entry.
 const CATEGORY_WEIGHT_OZ = {
-  "T-Shirts": 7,
+  Shirts: 7,
   Belts: 10,
   Shoes: 40,
-  Backpacks: 32,
+  Bags: 32,
+  // No stock in these two yet. Listed anyway so the first product added to one is not silently
+  // quoted at the fallback weight — these are estimates like the rest, and need a scale.
+  Shorts: 9,
+  Tracksuits: 28,
 };
+
+// Mirrors DEFAULT_WEIGHT_OZ in db/orders.py. Named rather than inlined so the parity test can
+// find it: the two files drifting apart on a weight is exactly the bug that billed every bag at
+// 8 oz instead of 32, and an unnamed literal is invisible to the check that now catches it.
+const DEFAULT_WEIGHT_OZ = 8;
 
 const PACKAGING_OZ = 3; // mailer / box / padding added once per order
 
@@ -119,8 +134,33 @@ const SHIPPING_TIERS = [
 
 const SHIPPING_OVER_MAX = 22; // anything heavier than the last tier
 
+// Orders above this cannot be priced in advance by anyone: they need the large box, which bills on
+// volume rather than weight and adds fixed fees no weight ladder can express. They are not blocked
+// — they go to a human for a real quote. MIRRORS max_quotable_oz in shipping_rates.json, and
+// tests/test_shipping_weights.py fails if the two drift apart.
+const MANUAL_QUOTE_OVER_OZ = 496;
+// How long a manual-quote order holds its stock. Mirrors MANUAL_QUOTE_TTL_SECONDS in db/orders.py;
+// the sweep that releases it is server-side, so a number typed here that disagrees promises the
+// buyer a hold the shop does not honour. Parity is tested.
+const MANUAL_QUOTE_HOLD_HOURS = 48;
+// And the card/reserve hold, mirroring RESERVATION_TTL_SECONDS. Same reason: the sweep is
+// server-side, so a number here that disagrees promises a hold the shop does not honour.
+const RESERVATION_HOLD_MINUTES = 30;
+
+// The reserve flow's notice, in JS because applyPaymentCopy is now a RESTORE path: a manual quote
+// rewrites this block, so leaving the reserve wording only in index.html meant it never came back.
+const RESERVE_NOTICE_HTML =
+  "<strong>Card payment isn\u2019t live yet.</strong> Place the order below and it\u2019s held in "
+  + `your name for ${RESERVATION_HOLD_MINUTES} minutes \u2014 then DM `
+  + '<a href="https://instagram.com/paidoffclothes" target="_blank" rel="noopener">@paidoffclothes</a>'
+  + " to settle up. Nothing is charged here and no card details are collected.";
+
+function needsManualQuote(lines) {
+  return lines.length > 0 && orderWeightOz(lines) > MANUAL_QUOTE_OVER_OZ;
+}
+
 function weightOf(p) {
-  return p.weightOz ?? CATEGORY_WEIGHT_OZ[p.category] ?? 8;
+  return p.weightOz ?? CATEGORY_WEIGHT_OZ[p.category] ?? DEFAULT_WEIGHT_OZ;
 }
 
 // Total billable weight for an order: every unit, plus packaging once.
@@ -1190,16 +1230,18 @@ function openCheckout(items) {
   document.getElementById("checkout-items").innerHTML = items.map((p) => checkoutItemRow(p, false, items)).join("");
   document.getElementById("checkout-bulk-feedback").innerHTML = bulkFeedbackHtml(items, false);
   document.getElementById("checkout-subtotal").textContent = money(subtotal);
-  document.getElementById("checkout-shipping").textContent = money(shipping);
-  document.getElementById("checkout-ship-note").textContent = `(${(orderWeightOz(items) / 16).toFixed(1)} lb, Ground Advantage)`;
-  document.getElementById("checkout-total-price").textContent = money(total);
+
   document.getElementById("checkout-form").reset();
   document.getElementById("checkout-form-view").hidden = false;
   document.getElementById("checkout-success-view").hidden = true;
 
   const payBtn = document.getElementById("checkout-pay-btn");
   payBtn.disabled = false;
-  document.getElementById("checkout-pay-label").innerHTML = `Reserve <span id="checkout-pay-amount">${money(total)}</span>`;
+  // Opens on the flat-ladder estimate, then replaces it the moment a ZIP resolves to a zone.
+  // setCheckoutShipping owns the button and the fine print in both modes and calls
+  // applyPaymentCopy itself, so calling it here too would only race with the answer.
+  setCheckoutShipping(shipping, needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
+  refreshCheckoutShipping();
 
   document.getElementById("checkout-overlay").hidden = false;
   syncBodyScroll();
@@ -1217,7 +1259,10 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
   triggerLabelEl.textContent = "Processing...";
   const items = checkoutItems;
   const subtotal = lineTotal(items);
-  const shipping = shippingFor(items);
+  // null, not the flat-ladder estimate, when nothing could price this order. The server recomputes
+  // either way and ignores what arrives — but sending a placeholder as if it were the figure is
+  // the habit that puts a made-up number somewhere it gets charged.
+  const shipping = checkoutShippingSource === "manual" ? null : shippingFor(items);
   const val = (id) => document.getElementById(id).value.trim();
 
   // Kept as separate fields because Pirate Ship's spreadsheet upload needs one column each.
@@ -1244,7 +1289,7 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
       email,
       subtotal,
       shipping,
-      total: subtotal + shipping,
+      total: shipping === null ? null : subtotal + shipping,
       weight_oz: orderWeightOz(items),
       ship_to,
       idempotency_key: checkoutKey,
@@ -1270,8 +1315,12 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
       document.getElementById("checkout-form-view").hidden = true;
       document.getElementById("checkout-success-view").hidden = false;
       // Not "Payment successful": nothing has been paid. Saying otherwise is the same dishonesty
-      // as collecting card numbers that go nowhere.
-      document.getElementById("payment-alert-title").textContent = "Order reserved — no payment taken";
+      // as collecting card numbers that go nowhere. A manual order is not "reserved" either — the
+      // headline has to match what actually happened, which is that a quote is on its way.
+      document.getElementById("payment-alert-title").textContent =
+        checkoutShippingSource === "manual"
+          ? "Shipping quote requested — no payment taken"
+          : "Order reserved — no payment taken";
       document.getElementById("payment-alert-desc").textContent =
         successMessage + (out.ref ? ` Your order reference is ${out.ref}.` : "");
     })
@@ -1279,6 +1328,286 @@ function completeCheckout(triggerLabelEl, method, successMessage, email) {
       triggerLabelEl.textContent = "Try again";
       showCheckoutError("Could not reach the server. Nothing has been charged.");
     });
+}
+
+// ---------- zone shipping ----------
+// The cart shows an ESTIMATE: it has no address, so it prices off the flat ladder. The checkout
+// panel asks the SERVER for the real figure as soon as a ZIP is entered — never recomputed here,
+// so the number on screen is the number that will be charged. A second implementation in the
+// browser is exactly how a cart figure and a card charge end up disagreeing.
+let shippingQuoteSeq = 0;
+let checkoutShippingSource = "estimate";
+
+// One writer for the shipping figure, the total and the wording, so they cannot disagree on screen.
+// The single writer for the shipping line, the total and the button amount, so those three can
+// never disagree on screen. It now has a third mode: an order too heavy to price in advance shows
+// no figure at all rather than a wrong one, and the button asks for a quote instead of payment.
+function setCheckoutShipping(shipping, source, group, manualReason) {
+  const subtotal = lineTotal(checkoutItems);
+  const manual = source === "manual" || shipping === null || shipping === undefined;
+  const total = manual ? null : subtotal + shipping;
+  const lb = (orderWeightOz(checkoutItems) / 16).toFixed(1);
+
+  document.getElementById("checkout-shipping").textContent = manual ? "Quoted by us" : money(shipping);
+  document.getElementById("checkout-total-price").textContent =
+    manual ? `${money(subtotal)} + shipping` : money(total);
+
+  // The short parenthetical goes beside the Shipping label; the sentence explaining a manual quote
+  // goes in its own block below. Inline, that sentence wrapped to five lines on a phone and pushed
+  // the figure off the right edge of the row.
+  const note = document.getElementById("checkout-ship-note");
+  if (note) {
+    if (manual) note.textContent = `(${lb} lb — quoted by hand)`;
+    else if (source === "zone") note.textContent = `(${lb} lb, Ground Advantage, ${group || "your"} zone)`;
+    else note.textContent = `(${lb} lb, estimated — enter your ZIP for the exact rate)`;
+  }
+
+  const why = document.getElementById("checkout-manual-note");
+  if (why) {
+    // Say why, in the buyer's terms. "Contact us" with no reason reads as a malfunction.
+    why.textContent = manual
+      ? `${manualReason || "This order needs a shipping quote we work out by hand."} `
+        + `Nothing is charged now — we email you the cost and your pieces are held for `
+        + `${MANUAL_QUOTE_HOLD_HOURS} hours.`
+      : "";
+    why.hidden = !manual;
+  }
+
+  // Write into the LABEL span, never the button's own textContent: that span is what
+  // applyPaymentCopy() fills, so replacing the button's text deletes it and the next call throws.
+  // And there has to be an else — without one, a buyer who typed an unpriceable ZIP and corrected
+  // it kept "Request a shipping quote" on a button that was about to take their money.
+  const payLabel = document.getElementById("checkout-pay-label");
+  const disclaimer = document.getElementById("checkout-disclaimer");
+  const notice = document.getElementById("checkout-notice");
+  if (manual) {
+    if (payLabel) payLabel.textContent = "Request a shipping quote";
+    if (disclaimer) {
+      disclaimer.textContent = `No payment is taken and no card details are collected. We reply `
+        + `with the shipping cost; your items are held for ${MANUAL_QUOTE_HOLD_HOURS} hours.`;
+    }
+    // The loudest promise on the panel, and in both other flows it says the order is held for 30
+    // minutes and to DM to settle up. Neither is true here: the hold is 48 hours and the next move
+    // is ours, not the buyer's. Copy moves with the flow — all of it, not just the button.
+    if (notice) {
+      notice.innerHTML = `<strong>This order is quoted by hand.</strong> Place it below and we'll `
+        + `email you the shipping cost, usually within a few hours. Your pieces are held for `
+        + `${MANUAL_QUOTE_HOLD_HOURS} hours while you decide. Nothing is charged until you agree `
+        + `to the total.`;
+    }
+  } else {
+    // Restores the label, the amount span and the fine print that belongs to the active flow.
+    applyPaymentCopy(total);
+  }
+
+  checkoutShippingSource = manual ? "manual" : source;
+}
+
+async function refreshCheckoutShipping() {
+  const zipEl = document.getElementById("co-zip");
+  const zip = (zipEl ? zipEl.value : "").trim();
+  if (!checkoutItems.length) return;
+
+  // A US ZIP is five digits; anything shorter cannot resolve to a zone, so don't ask.
+  if (zip.replace(/\D/g, "").length < 5) {
+    setCheckoutShipping(shippingFor(checkoutItems), needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
+    return;
+  }
+
+  const seq = ++shippingQuoteSeq;
+  try {
+    const res = await fetch("/api/shipping/quote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: checkoutItems.map((l) => ({ id: l.id, name: fullName(l), size: l.size, qty: l.qty })),
+        zip,
+      }),
+    });
+    const data = await res.json();
+    if (seq !== shippingQuoteSeq) return;   // a slow earlier reply must not overwrite a newer one
+    if (data && data.ok) {
+      setCheckoutShipping(data.shipping, data.source, data.zone_group, data.manual_quote_reason);
+      return;
+    }
+  } catch (err) { /* offline or file:// — fall through to the estimate */ }
+  if (seq === shippingQuoteSeq) setCheckoutShipping(shippingFor(checkoutItems), needsManualQuote(checkoutItems) ? "manual" : "estimate", null);
+}
+
+// ---------- stripe checkout ----------
+// Hosted Checkout: the buyer leaves for Stripe's page and comes back. Card details never touch
+// this site, which is why no card fields were ever added back to the form.
+//
+// Payments are OFF unless the server says otherwise, and the server only says so when it has both
+// an API key and a webhook secret. So a fresh clone, a `file://` page, or a half-configured
+// install all fall back to the reserve flow rather than offering a button that cannot work.
+const PAYMENTS = { enabled: false, mode: "off" };
+
+// Which cart lines a redirect is paying for, so coming back successful clears exactly those and
+// not a piece added in another tab while Stripe had the buyer.
+const PENDING_CHECKOUT_KEY = "poc_pending_checkout";
+
+async function loadPaymentsConfig() {
+  try {
+    const res = await fetch("/api/payments/config");
+    const data = await res.json();
+    PAYMENTS.enabled = !!data.payments_enabled;
+    PAYMENTS.mode = data.mode || "off";
+  } catch (err) {
+    // file://, or the server is down. Either way: no card payment, no error shown to the visitor.
+    PAYMENTS.enabled = false;
+    PAYMENTS.mode = "off";
+  }
+}
+
+// The reserve flow and the card flow make different promises, so the panel's copy has to move with
+// them. Leaving "no card details collected" up while Stripe collects card details would be exactly
+// the kind of claim that got "Encrypted checkout" removed.
+function applyPaymentCopy(total) {
+  const notice = document.getElementById("checkout-notice");
+  const trustCard = document.getElementById("checkout-trust-card");
+  const payLabel = document.getElementById("checkout-pay-label");
+  const eyebrow = document.getElementById("checkout-eyebrow");
+  const disclaimer = document.getElementById("checkout-disclaimer");
+
+  if (!PAYMENTS.enabled) {
+    payLabel.innerHTML = `Reserve <span id="checkout-pay-amount">${money(total)}</span>`;
+    // Written out rather than left to the markup's default. This function is the restore path
+    // after a manual quote has rewritten the line, and a branch that only ever sets copy in the
+    // OTHER flow is a one-way switch: the manual wording survived onto an order the panel had
+    // just priced, promising a shipping email nobody was going to send.
+    if (disclaimer) {
+      disclaimer.textContent = `No payment is taken here and no card details are collected. `
+        + `Your items are held for ${RESERVATION_HOLD_MINUTES} minutes.`;
+    }
+    if (notice) notice.innerHTML = RESERVE_NOTICE_HTML;
+    return;
+  }
+
+  payLabel.innerHTML = `Pay <span id="checkout-pay-amount">${money(total)}</span>`;
+  if (trustCard) trustCard.textContent = "Card details go straight to Stripe";
+  if (eyebrow) eyebrow.textContent = "Card Payment";
+  // The reserve flow's fine print says no payment is taken — true then, false the moment Stripe is
+  // taking one. Every line that makes a promise has to move with the flow, not just the button.
+  if (disclaimer) {
+    disclaimer.textContent =
+      PAYMENTS.mode === "test"
+        ? "Stripe test mode: no card is charged and no money moves. Your items are held for 30 minutes."
+        : "Payment is processed by Stripe. Your items are held for 30 minutes while you pay.";
+  }
+  if (notice) {
+    // In test mode this says so in the loudest place on the panel. A test charge that looks like a
+    // real one is how someone ends up believing they have been paid.
+    notice.innerHTML =
+      PAYMENTS.mode === "test"
+        ? "<strong>Test mode — no real money moves.</strong> This checkout is wired to Stripe's test " +
+          "environment. Use card 4242 4242 4242 4242, any future expiry and any CVC. A real card will be declined."
+        : "<strong>Payment is handled by Stripe.</strong> You'll be sent to Stripe's secure checkout " +
+          "page to pay, then brought back here. Your card details never touch this site.";
+  }
+}
+
+// Server-side pricing is the whole point: this posts name/size/qty and nothing else. The order is
+// priced, stock-checked and reserved by the server, and the Stripe session is built from those
+// figures — so what the card is charged is what the shop computed, not what the page displayed.
+function startStripeCheckout(labelEl, email, ship_to) {
+  labelEl.textContent = "Taking you to Stripe...";
+  const items = checkoutItems;
+
+  fetch("/api/checkout/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email,
+      ship_to,
+      idempotency_key: checkoutKey,
+      items: items.map((l) => ({ id: l.id, name: fullName(l), size: l.size, qty: l.qty })),
+    }),
+  })
+    .then((res) => res.json().then((out) => ({ ok: res.ok && out.ok, out })))
+    .then(({ ok, out }) => {
+      if (!ok || !out.url) {
+        labelEl.textContent = "Try again";
+        document.getElementById("checkout-pay-btn").disabled = false;
+        showCheckoutError(out.error || "Could not start the payment. Nothing has been charged.");
+        return;
+      }
+      // Recorded before leaving: the browser may not come back for minutes, or at all.
+      try {
+        localStorage.setItem(PENDING_CHECKOUT_KEY, JSON.stringify({
+          ref: out.ref, lineIds: items.map((l) => l.lineId),
+        }));
+      } catch (err) { /* private mode — the cart just won't self-clear */ }
+      window.location.href = out.url;
+    })
+    .catch(() => {
+      labelEl.textContent = "Try again";
+      document.getElementById("checkout-pay-btn").disabled = false;
+      showCheckoutError("Could not reach the server. Nothing has been charged.");
+    });
+}
+
+// Coming back from Stripe. The query string is NOT evidence of anything — anyone can type
+// ?checkout=success — so the order's real status is read from the server before a word is shown.
+async function initCheckoutReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get("checkout");
+  if (!outcome) return;
+
+  const ref = (params.get("ref") || "").trim();
+  // Clean the URL either way, so a refresh doesn't replay this and the ref doesn't linger in the
+  // address bar to be copied into a screenshot.
+  window.history.replaceState({}, "", window.location.pathname);
+
+  let pending = null;
+  try {
+    pending = JSON.parse(localStorage.getItem(PENDING_CHECKOUT_KEY) || "null");
+  } catch (err) { /* ignore */ }
+  try {
+    localStorage.removeItem(PENDING_CHECKOUT_KEY);
+  } catch (err) { /* ignore */ }
+
+  // Reuses the panel's existing alert view rather than inventing a toast: same two elements the
+  // reserve flow writes into, same Done button.
+  const showAlert = (titleText, descText) => {
+    document.getElementById("payment-alert-title").textContent = titleText;
+    document.getElementById("payment-alert-desc").textContent = descText;
+    document.getElementById("checkout-form-view").hidden = true;
+    document.getElementById("checkout-success-view").hidden = false;
+    document.getElementById("checkout-overlay").hidden = false;
+    syncBodyScroll();
+  };
+
+  if (outcome === "cancelled") {
+    // Stock is released by the webhook on checkout.session.expired, or by the reservation TTL.
+    // The cart is deliberately left exactly as it was so the buyer can simply try again.
+    showAlert("Payment cancelled", "Nothing was charged and your cart is still here.");
+    return;
+  }
+  if (outcome !== "success" || !ref) return;
+
+  let state = null;
+  try {
+    const res = await fetch(`/api/checkout/status?ref=${encodeURIComponent(ref)}`);
+    state = await res.json();
+  } catch (err) { /* handled below */ }
+
+  if (state && state.ok && state.paid) {
+    if (pending && Array.isArray(pending.lineIds)) pending.lineIds.forEach((id) => removeFromCart(id));
+    showAlert(
+      PAYMENTS.mode === "test" ? "Test payment complete" : "Payment received",
+      `Order ${ref} is paid${PAYMENTS.mode === "test" ? " (test mode — no real money moved)" : ""}. ` +
+        "A confirmation follows once shipping is arranged."
+    );
+  } else {
+    // Stripe redirected but our webhook has not landed yet. Saying "paid" here would be guessing,
+    // and the cart is left alone until the server agrees the money arrived.
+    showAlert(
+      "Payment is confirming",
+      `Order ${ref} was submitted and is waiting on confirmation from Stripe. ` +
+        "Check My Orders in a moment — nothing further is needed from you."
+    );
+  }
 }
 
 // One key per checkout attempt, so a double-click or a retried request cannot create two orders.
@@ -1305,16 +1634,49 @@ function initCheckout() {
     if (e.target.id === "checkout-overlay") closeCheckout();
   });
 
+  const zipEl = document.getElementById("co-zip");
+  if (zipEl) {
+    let t = null;
+    zipEl.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(refreshCheckoutShipping, 250);   // one request per pause, not per keystroke
+    });
+    zipEl.addEventListener("blur", refreshCheckoutShipping);
+  }
+
   document.getElementById("checkout-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const payBtn = document.getElementById("checkout-pay-btn");
     const email = document.getElementById("co-email").value;
     payBtn.disabled = true;
     const label = checkoutItems.length > 1 ? `Your ${checkoutItems.length} items are` : `${checkoutItems[0].name} is`;
+    const val = (id) => document.getElementById(id).value.trim();
+
+    // An order nothing could price must not be handed to Stripe. The server refuses it with a 409
+    // anyway — prices are recomputed there and a manual order has no total to charge — but a
+    // buyer should not meet that as an error after tapping a button reading "Pay".
+    const manual = checkoutShippingSource === "manual";
+
+    if (PAYMENTS.enabled && !manual) {
+      startStripeCheckout(document.getElementById("checkout-pay-label"), email, {
+        name: val("co-ship-name"),
+        address1: val("co-address1"),
+        address2: val("co-address2"),
+        city: val("co-city"),
+        state: val("co-state").toUpperCase(),
+        zip: val("co-zip"),
+        country: "US",
+      });
+      return;
+    }
+
     completeCheckout(
       document.getElementById("checkout-pay-label"),
-      "Reservation",   // `method` is now only used for the order record, not the headline
-      `${label} on hold. A confirmation will go to ${email} once shipping is arranged.`,
+      manual ? "Quote requested" : "Reservation",   // for the order record, not the headline
+      manual
+        ? `${label} held. We'll email ${email} the shipping cost, usually within a few hours. `
+          + `Nothing has been charged.`
+        : `${label} on hold. A confirmation will go to ${email} once shipping is arranged.`,
       email
     );
   });
@@ -1426,7 +1788,7 @@ function renderCartItems() {
   const cartShip = shippingFor(cart);
   document.getElementById("cart-subtotal").textContent = money(cartSub);
   document.getElementById("cart-shipping").textContent = money(cartShip);
-  document.getElementById("cart-ship-note").textContent = cart.length ? `(${(orderWeightOz(cart) / 16).toFixed(1)} lb)` : "";
+  document.getElementById("cart-ship-note").textContent = cart.length ? `(${(orderWeightOz(cart) / 16).toFixed(1)} lb, before ZIP)` : "";
   document.getElementById("cart-total-price").textContent = money(cartSub + cartShip);
 
   bindCartClicks(wrap);
@@ -1479,6 +1841,18 @@ function initCart() {
 }
 
 // ---------- my orders (email lookup — no accounts) ----------
+// The database's own words are not the buyer's. "quote_requested" is accurate and unreadable, and
+// it is the status they see most often on a bulky order.
+const ORDER_STATUS_LABEL = {
+  pending: "Reserved — awaiting payment",
+  quote_requested: "Shipping quote in progress",
+  paid: "Paid",
+  fulfilled: "Shipped",
+  cancelled: "Cancelled",
+  refunded: "Refunded",
+  failed: "Payment failed",
+};
+
 function orderRow(order) {
   const date = new Date(order.time * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   const itemsSummary = order.items
@@ -1498,13 +1872,15 @@ function orderRow(order) {
       </div>
       <div class="order-field-row">
         <span class="order-field-label">Status</span>
-        <span class="order-field-value">${order.status}</span>
+        <span class="order-field-value">${ORDER_STATUS_LABEL[order.status] || order.status}</span>
       </div>
       <div class="order-details" hidden>
         <div class="order-field-row order-field-block">
           <p class="order-field-label">Placed</p>
-          <p class="order-field-value">${date} &middot; ${money(order.total)}${
-            order.shipping != null ? ` (incl. ${money(order.shipping)} shipping)` : ""
+          <p class="order-field-value">${date} &middot; ${
+            order.total == null
+              ? `${money(order.subtotal)} + shipping (being quoted)`
+              : money(order.total) + (order.shipping != null ? ` (incl. ${money(order.shipping)} shipping)` : "")
           }</p>
         </div>
         <div class="order-field-row order-field-block">
@@ -1876,11 +2252,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   initModal();
   initLightbox();
   initCheckout();
+  // Before initCheckoutReturn, which needs to know whether this build takes cards at all.
+  await loadPaymentsConfig();
   initCart();
   initOrders();
   initControls();
   initSocialToggle();
   initTilt();
+  // Last: the cart must be loaded before a paid return can clear the lines it paid for.
+  initCheckoutReturn();
 });
 
 

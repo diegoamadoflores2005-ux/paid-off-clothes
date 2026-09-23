@@ -1,0 +1,273 @@
+"""Which carrier quotes are still missing, exactly — and what to type into Pirate Ship.
+
+    python3 tools/shipping_gaps.py              what is filled, what is empty
+    python3 tools/shipping_gaps.py --worklist   the quotes to collect, in the order to collect them
+    python3 tools/shipping_gaps.py --why        why each band is on the list
+
+Reads shipping_rates.json. It never fills a cell, never interpolates between two quotes, and never
+reuses a price from one zone group in another. A quote for 8 oz to one ZIP says nothing about 3 lb
+and nothing about a different zone; treating it as if it did is how a shop ends up paying postage
+out of its own margin on every distant order.
+"""
+import json
+import os
+import sys
+import types
+
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RATES = os.path.join(APP_DIR, "shipping_rates.json")
+# Derived from zone_groups via db/orders.py, never hardcoded — see group_names() there for why.
+GROUPS = None   # filled in main() once the file is loaded
+
+# Why each band is on the worklist. Written from the catalogue, not guessed — see the notes in
+# STRIPE.md for how these were derived.
+WHY = {
+    "sub": "1 shirt or 1 belt — the single-item order",
+    "2": "2-4 shirts, 2 belts",
+    "3": "5-6 shirts, 1 pair shoes, 1 bag, 3-4 belts",
+    "4": "7-8 shirts, 5-6 belts",
+    "5": "9-10 shirts, 2 bags",
+    "6": "2 pairs shoes, 8 belts",
+    "7": "3 bags, 10 belts",
+    "8": "3 pairs shoes",
+    "9": "20 SHIRTS — the deepest advertised bulk tier. Below this the 20+ price is unshippable.",
+    "11": "4 pairs shoes, 5 bags",
+    "13": "5 pairs shoes, 6 bags",
+    "16": "6 pairs shoes, 8 bags",
+}
+
+
+def band_label(b):
+    return "under 1 lb" if b == "sub" else f"{b} lb"
+
+
+def band_oz(b):
+    return "≤15.99" if b == "sub" else str(int(b) * 16)
+
+
+def load():
+    with open(RATES, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def load_orders():
+    """db/orders.py, compiled from source rather than imported.
+
+    Importing it would pull in the whole order pipeline for two pure functions, and a stale .pyc is
+    validated on (mtime, size) — a same-length edit in the same second is served from cache, which
+    once had the shipping tests checking bytecode instead of the file on disk.
+    """
+    path = os.path.join(APP_DIR, "db", "orders.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    mod = types.ModuleType("orders_for_gaps")
+    mod.__file__ = path
+    exec(compile(src, path, "exec"), mod.__dict__)
+    return mod
+
+
+def cells(rates):
+    """Every cell in the table as (section, band, group, price)."""
+    out = []
+    table = rates.get("rate_table", {})
+    for section in ("core", "heavy"):
+        for band, row in table.get(section, {}).items():
+            for g in GROUPS:
+                out.append((section, band, g, row.get(g)))
+    for g in GROUPS:
+        out.append(("over_max", "over", g, table.get("over_max", {}).get(g)))
+    return out
+
+
+def main():
+    args = sys.argv[1:]
+    global GROUPS
+    rates = load()
+    orders = load_orders()
+    GROUPS = orders.group_names(rates)
+    origin = rates.get("origin_zip")
+    policy = rates.get("zone_policy")
+    all_cells = cells(rates)
+    filled = [c for c in all_cells if c[3] is not None]
+    empty = [c for c in all_cells if c[3] is None]
+
+    print("Shipping quotes — Paid Off Clothes")
+    print("=" * 72)
+    print(f"carrier     : {rates.get('carrier')} {rates.get('service', '')}".rstrip())
+    print(f"rate basis  : {rates.get('rate_basis')}  "
+          f"(only {rates.get('rate_basis')}-based quotes may fill a cell)")
+    print(f"origin ZIP  : {origin or 'NOT SET'}")
+    print(f"zone policy : {policy}")
+    for g in GROUPS:
+        zs = rates.get("zone_groups", {}).get(g, {})
+        gw = max(len(x) for x in GROUPS)
+        print(f"  {g:<{gw}} zones {', '.join(map(str, zs.get('zones', []))):<8} {zs.get('note','')}")
+    print()
+
+    ref = [q for q in rates.get("quotes", [])
+           if str(q.get("use", "")).startswith("reference only")]
+    if ref:
+        print("Held as reference, deliberately not in the table:")
+        for q in ref:
+            if q.get("zone") is not None and q.get("zone_verified"):
+                zone = f"zone {q['zone']} confirmed"
+            elif q.get("zone_inferred"):
+                zone = f"zone {q['zone_inferred']} inferred, UNCONFIRMED"
+            else:
+                zone = "zone unknown"
+            weighed = {True: "weighed", False: "weight ESTIMATED, not weighed"}.get(
+                q.get("weighed"), "weighed: not stated")
+            print(f"  ${q['price_usd']:.2f} at {q['oz']} oz to {q['dest_zip']} — {zone}; {weighed}")
+        print()
+
+    # Side-by-side quotes for one lane, in two shapes: several carriers at one weight, or one
+    # carrier at several weights. Only a row matching this file's `carrier` can ever reach the
+    # table — a ladder built from two carriers prices nothing anyone can actually be charged.
+    for cmp in rates.get("rate_comparisons", []):
+        dims = cmp.get("dims_in_stated")
+        dims_s = ("x".join(str(d) for d in dims) + " in (estimated)") if dims else "no dimensions"
+        lane = f"to {cmp['dest_zip']} (zone {cmp['zone']}), {dims_s}"
+        if cmp.get("quotes"):
+            print(f"Same lane at {cmp['oz']} oz, {lane}:")
+            for q in sorted(cmp["quotes"], key=lambda q: q["price_usd"]):
+                ours = (q["carrier"] == rates.get("carrier")
+                        and q["service"] == rates.get("service"))
+                print(f"  ${q['price_usd']:>5.2f}  {q['carrier']} {q['service']}"
+                      + ("  <- the only one eligible for the table" if ours else ""))
+        if cmp.get("results"):
+            print(f"{cmp.get('purpose', 'Same lane, several weights')} — "
+                  f"{cmp.get('carrier','')} {cmp.get('service','')} {lane}:")
+            for r in sorted(cmp["results"], key=lambda r: r["oz"]):
+                print(f"  ${r['price_usd']:>5.2f}  at {r['oz']} oz")
+        if cmp.get("finding"):
+            print(f"  => {cmp['finding']}")
+        print()
+
+    # A conflict is the kind of thing that must be in front of you every time, not filed away.
+    # A *resolved* one is the opposite: shouting about it every run buries the open ones, so it
+    # collapses to a single line and keeps its full reasoning in the file.
+    for c in rates.get("_conflicts", []):
+        status = c.get("status", "")
+        if status.startswith("RESOLVED"):
+            print(f"   resolved: {c['cell']} — {status[len('RESOLVED'):].lstrip(' -—')}")
+            continue
+        print(f"!! CONFLICT in {c['cell']}: {' vs '.join(c['quotes'])}")
+        for line in c.get("why_it_matters", []):
+            print(f"   {line}")
+        for line in c.get("diagnosis", []):
+            print(f"   > {line}")
+        if c.get("to_resolve"):
+            print(f"   NEXT: {c['to_resolve']}")
+        if c.get("meanwhile"):
+            print(f"   meanwhile: {c['meanwhile']}")
+        print()
+
+    for q in rates.get("quarantined_quotes", []):
+        if str(q.get("status", "")).startswith("RESOLVED"):
+            continue
+        dims = q.get("dims_in_stated") or []
+        print(f"~~ QUARANTINED: {len(q.get('bands_quoted', []))} quotes at "
+              f"{'x'.join(map(str, dims))} in, not entered in the table")
+        for line in q.get("why", []):
+            print(f"   {line}")
+        for line in q.get("correction", []):
+            print(f"   ! {line}")
+        if q.get("the_one_thing_that_cannot_be_right"):
+            print(f"   CANNOT BE RIGHT: {q['the_one_thing_that_cannot_be_right']}")
+        if q.get("blocking_question"):
+            print(f"   ASK: {q['blocking_question']}")
+        print()
+
+    # Soundness and provenance are reported here, not only inside zone_pricing_ready(), because a
+    # table can be completely filled and still be holding a mistake.
+    problems = orders.rate_table_problems(rates)
+    if problems:
+        print("!! THE TABLE IS NOT SOUND — zone pricing cannot switch on:")
+        for pr in problems:
+            print(f"   {pr}")
+        print()
+    unverified = orders.unverified_cells(rates)
+    if unverified:
+        print("Cells holding a price that is NOT verified:")
+        for cell, why in unverified:
+            print(f"   {cell}: {why}")
+        print()
+
+    print(f"cells filled : {len(filled)} of {len(all_cells)}")
+    print(f"  of those, verified : {len(filled) - len(unverified)}")
+    print(f"cells empty  : {len(empty)}")
+    print()
+
+    # the grid
+    table = rates.get("rate_table", {})
+    w = max(9, max(len(g) for g in GROUPS) + 2)
+    print("  " + "band".ljust(13) + "oz".rjust(7) + "".join(g.rjust(w) for g in GROUPS))
+    for section in ("core", "heavy"):
+        for band, row in table.get(section, {}).items():
+            line = "  " + band_label(band).ljust(13) + band_oz(band).rjust(7)
+            for g in GROUPS:
+                v = row.get(g)
+                line += (f"{v:.2f}".rjust(w) if v is not None else "—".rjust(w))
+            print(line + ("" if section == "core" else "   (heavy)"))
+    line = "  " + "over top".ljust(13) + "—".rjust(7)
+    for g in GROUPS:
+        v = table.get("over_max", {}).get(g)
+        line += (f"{v:.2f}".rjust(w) if v is not None else "—".rjust(w))
+    print(line + "   (fallback)")
+    print("\n  — = no quote. Nothing is inferred from a neighbouring cell.")
+
+    if "--worklist" in args or "--why" in args:
+        print()
+        print("Worklist — one Pirate Ship quote per line")
+        print("-" * 72)
+        print(f"Set origin to {origin}. For each group pick ONE destination, read the zone Pirate")
+        print("Ship prints, and use that same destination for every weight in the group.")
+        print()
+        n = 0
+        for section in ("core", "heavy"):
+            if section == "heavy":
+                print("\n  --- heavy: bulk shoes and bags only. Skip if you cap those orders. ---")
+            for band in table.get(section, {}):
+                missing = [g for g in GROUPS if table[section][band].get(g) is None]
+                if not missing:
+                    continue
+                n += len(missing)
+                why = f"   {WHY.get(band, '')}" if "--why" in args else ""
+                print(f"  {band_label(band):<12} at {band_oz(band):>6} oz   -> {', '.join(missing)}{why}")
+        over_missing = [g for g in GROUPS if table.get("over_max", {}).get(g) is None]
+        if over_missing:
+            n += len(over_missing)
+            print(f"\n  {'over top band':<12}            -> {', '.join(over_missing)}"
+                  + ("   quote the heaviest order you will accept; this covers everything above"
+                     if "--why" in args else ""))
+        print(f"\n  {n} quotes to collect.")
+
+    # ---- what the remaining quotes actually buy -------------------------------------------------
+    # Not "what is blocking launch". Nothing is: an unfilled cell is a manual quote, not a refused
+    # order. So the outstanding work is ranked by how many orders it takes off the owner's desk,
+    # which is why the destination share is here rather than a bare count of empty cells.
+    print()
+    print("=" * 72)
+    print("COVERAGE — what each column prices today, and what filling it would buy\n")
+    print(f"  {'group':<13}{'of map':>8}{'prices up to':>15}   still to quote")
+    for row in orders.coverage_report(rates):
+        ceiling = ("—" if row["priced_to_oz"] is None
+                   else f"{row['priced_to_oz'] / 16:.2f} lb")
+        print(f"  {row['group']:<13}{row['share'] * 100:>7.1f}%{ceiling:>15}   "
+              f"{row['quotes_to_complete']}  ({', '.join(row['missing_bands']) or 'none'})")
+    print("\n  Above a column's ceiling, and in every column with no cell at all, orders are")
+    print("  QUOTED BY HAND. They are not blocked and they are never priced off the flat ladder.")
+    print("  So the minimum additional quotes required to launch is 0; these only reduce email.")
+
+    print()
+    print("=" * 72)
+    if empty:
+        print("Verified cells price the site TODAY — per cell, not all-or-nothing.")
+        print("Everything they do not cover goes to a manual quote, so an empty cell costs")
+        print("the owner an email rather than the shop a sale.")
+        print("Enter quotes, then run: python3 tools/apply_shipping_rates.py")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
