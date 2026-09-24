@@ -597,10 +597,33 @@ function trackClick(name) {
   }).catch(() => {});
 }
 
+// How many buyable styles a category has right now. Styles whose sizes are all zero never reach
+// PRODUCTS at all (productFromRecord returns null), so this only has to discount the ones the
+// owner has marked sold.
+function availableInCategory(c) {
+  return PRODUCTS.filter((p) => p.status !== "sold" && (c === "All" || p.category === c)).length;
+}
+
+// Which categories the STOREFRONT shows. Derived on every render from live stock, never stored:
+// a category that gains a product reappears on the next page load with nothing to switch back on,
+// and one that sells out drops away the same way.
+//
+// This hides tiles; it does not remove categories. products.json still declares all of them, the
+// admin dashboard still lists and seeds them, and CATEGORIES is untouched — so the empty-category
+// tile that CLAUDE.md calls intentional still exists, just not in front of a customer, for whom it
+// is a dead end reading "0 items".
+//
+// Two are always kept. "All" is the reset control and owns no products of its own, so it would
+// hide itself. The active one is kept so a filtered grid can never be left with no lit tile
+// explaining why it is filtered.
+function visibleCategories() {
+  return CATEGORIES.filter((c) => c === "All" || c === state.category || availableInCategory(c) > 0);
+}
+
 function renderCategoryTiles() {
   const wrap = document.getElementById("category-tiles");
 
-  wrap.innerHTML = CATEGORIES.map((c) => {
+  wrap.innerHTML = visibleCategories().map((c) => {
     const count = c === "All" ? PRODUCTS.length : PRODUCTS.filter((p) => p.category === c).length;
     const thumb = (PRODUCTS.find((p) => p.img && (c === "All" || p.category === c)) || {}).img;
     return `
