@@ -6,6 +6,7 @@ paidoff.db-wal
 paidoff.db-shm
 admin_auth.json
 admin_token.txt
+stripe_config.json
 costs.json
 clicks.json
 orders.json
