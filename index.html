@@ -14,7 +14,7 @@
      are parsed. -->
 <link rel="icon" href="images/favicon.png" type="image/png" />
 <link rel="stylesheet" href="fonts/fonts.css?v=1" />
-<link rel="stylesheet" href="styles.css?v=65" />
+<link rel="stylesheet" href="styles.css?v=67" />
 </head>
 <body>
 
@@ -52,8 +52,7 @@
   <div class="wrap header-inner">
     <a href="#" class="logo" aria-label="Paid Off Clothes">PAIDOFFCLOTHES<span class="dot">.</span></a>
     <nav class="nav">
-      <a href="#stock" class="nav-link tilt" data-tilt-max="6">Stock</a>
-      <a href="#bid" class="nav-link tilt" data-tilt-max="6">Bid of the Week</a>
+      <a href="#stock" class="nav-link tilt" data-tilt-max="6">Shop</a>
       <a href="#how" class="nav-link tilt" data-tilt-max="6">How It Works</a>
     </nav>
     <div class="header-actions">
@@ -90,46 +89,22 @@
   </div>
 </header>
 
+<!-- The hero is deliberately short. It carries the identity and then gets out of the way: the
+     category tiles and the grid start inside the first screen on a phone, where a full-height
+     masthead used to push the first product more than four screens down. -->
 <section class="hero">
   <div class="wrap hero-inner">
-    <p class="eyebrow">private stock · rotating drops · dm to cop</p>
+    <p class="eyebrow">private stock · rotating drops</p>
     <h1>second hand.<br>first pick.</h1>
-    <p class="hero-sub">Everything on this page passed through my hands first. Limited runs, one of each size, gone when it's gone.</p>
-    <a href="#stock" class="btn btn-primary tilt" data-tilt-max="8">View Current Stock</a>
-  </div>
-</section>
-
-<section id="featured" class="featured">
-  <div class="wrap">
-    <div class="section-head">
-      <h2>Featured Picks</h2>
-      <p class="section-note">Four pieces worth a second look. Tap the stack to spread it out.</p>
-    </div>
-    <div class="stack-wrap" id="stack-wrap" role="group" aria-expanded="false" aria-label="Featured picks — hover or focus a card to expand">
-      <!-- stack cards injected by script.js -->
-    </div>
-  </div>
-</section>
-
-<section id="bid" class="bid-week">
-  <div class="wrap">
-    <div class="section-head">
-      <h2>Bid of the Week</h2>
-      <p class="section-note">One piece, one week, last one in stock. Highest bid Sunday night wins it.</p>
-    </div>
-    <div class="bid-card" id="bid-card">
-      <!-- bid item injected by script.js -->
-    </div>
+    <p class="hero-sub">One of each size. Gone when it's gone.</p>
   </div>
 </section>
 
 <section id="stock" class="stock">
   <div class="wrap">
 
-    <div class="section-head">
-      <h2>Shop by Category</h2>
-      <p class="section-note">Pick a category to jump straight to it.</p>
-    </div>
+    <!-- The tiles ARE the category navigation, so they carry no heading of their own — a
+         "Shop by Category" title above self-explanatory tiles was a screen of pure label. -->
     <div class="category-tiles" id="category-tiles">
       <!-- category tiles injected by script.js -->
     </div>
@@ -154,7 +129,10 @@
       </label>
       <label class="select-field">
         <span>Sort by</span>
-        <select id="sort-select">
+        <!-- The visible "Sort by" span is hidden under 640px, where it wrapped the control onto a
+             second line. aria-label carries the name in its place so the select is never unlabelled
+             for a screen reader. -->
+        <select id="sort-select" aria-label="Sort by">
           <option value="newest">Newest</option>
           <option value="price-asc">Price: Low to High</option>
           <option value="price-desc">Price: High to Low</option>
@@ -165,8 +143,6 @@
     <div class="size-filter" id="size-filter">
       <!-- size chips injected by script.js -->
     </div>
-
-    <p class="section-note">Prices firm unless stated. First DM, first serve.</p>
 
     <div class="grid" id="product-grid">
       <!-- product cards injected by script.js -->
@@ -207,7 +183,7 @@
     <div class="signup-card">
       <p class="eyebrow">Paid Off Clothes</p>
       <h2>get the drop.</h2>
-      <p class="signup-note">First word on new stock, restocks, and the weekly bid before anyone else. Optional — the whole store is open either way.</p>
+      <p class="signup-note">First word on new stock and restocks. Optional — the whole store is open either way.</p>
       <form id="signup-form">
         <div class="form-field">
           <label for="signup-email">Email</label>
@@ -449,7 +425,7 @@
 
 
 
-<script src="script.js?v=65"></script>
+<script src="script.js?v=67"></script>
 </body>
 </html>
 
