@@ -4,8 +4,8 @@
 // dashboard will read and write. Nothing about inventory is hardcoded in this file any more.
 //
 // PRODUCTS stays a `const` array that gets FILLED rather than reassigned: renderProducts,
-// getBidItem, computeFeatured, loadCart and the pricing helpers all close over this binding, so
-// replacing it would leave half the site pointing at a stale array.
+// loadCart and the pricing helpers all close over this binding, so replacing it would leave half
+// the site pointing at a stale array.
 
 const NEEDS_BRAND = "[brand?]";
 
@@ -568,158 +568,12 @@ function sizesOf(p) {
   return p.sizes.map((s) => s.size);
 }
 
-// ---------- bid of the week ----------
-let bidItem = null;
-
-function isoWeekNumber(date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
-}
-
-// Rotates automatically each week — no manual curation needed.
-function getBidItem() {
-  const eligible = PRODUCTS.filter((p) => p.status === "available");
-  if (eligible.length === 0) return null;
-  return eligible[isoWeekNumber(new Date()) % eligible.length];
-}
-
-function renderBidCard() {
-  const card = document.getElementById("bid-card");
-  bidItem = getBidItem();
-
-  if (!bidItem) {
-    card.innerHTML = `<p class="cart-empty-note">Nothing eligible for bidding right now — check back once new stock drops.</p>`;
-    return;
-  }
-
-  card.innerHTML = `
-    <div class="bid-card-media">${bidItem.img ? `<img src="${bidItem.img}" alt="${bidItem.name}">` : ""}</div>
-    <div class="bid-card-info">
-      <span class="tag available">Last One In Stock</span>
-      <p class="card-brand${hasBrand(bidItem) ? "" : " card-brand-missing"}">${bidItem.brand}</p>
-      <h3>${bidItem.name}</h3>
-      <p class="card-meta">${bidItem.category} · ${bidItem.meta}</p>
-      <p class="bid-card-desc">${bidItem.desc}</p>
-      <div class="bid-current">
-        <div>
-          <span class="bid-current-label">Current Bid</span>
-          <span class="bid-current-amount" id="bid-current-amount">$${bidItem.price}</span>
-        </div>
-        <span class="bid-current-name" id="bid-current-name">Starting price — no bids yet</span>
-      </div>
-      <form class="bid-form" id="bid-form">
-        <input type="text" id="bid-name" placeholder="Your name" maxlength="40" required />
-        <input type="number" id="bid-amount" placeholder="$${bidItem.price + 1}+" min="${bidItem.price + 1}" step="1" required />
-        <button type="submit" class="btn btn-primary tilt" data-tilt-max="6">Place Bid</button>
-      </form>
-      <p class="bid-error" id="bid-error" hidden></p>
-      <p class="bid-note">Ends Sunday at midnight. Highest bid wins — no snipe protection, so bid your max.</p>
-    </div>
-  `;
-
-  document.getElementById("bid-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    submitBid();
-  });
-  document.querySelector(".bid-card-media").addEventListener("click", (e) => {
-    if (e.target.tagName === "IMG") openLightbox(e.target.src, e.target.alt);
-  });
-
-  initTilt();
-  refreshBidState();
-}
-
-function updateBidDisplay(current) {
-  const amountEl = document.getElementById("bid-current-amount");
-  if (!bidItem || !amountEl) return;
-  const amountInput = document.getElementById("bid-amount");
-  const nameEl = document.getElementById("bid-current-name");
-  const minNext = (current && current.amount ? current.amount : bidItem.price) + 1;
-
-  amountEl.textContent = current && current.amount ? `$${current.amount}` : `$${bidItem.price}`;
-  nameEl.textContent = current && current.name ? `by ${current.name}` : "Starting price — no bids yet";
-  amountInput.min = minNext;
-  amountInput.placeholder = `$${minNext}+`;
-}
-
-async function refreshBidState() {
-  if (!bidItem) return;
-  // A backgrounded tab kept polling every 6s forever — a request, a JSON parse and a DOM update
-  // for a page nobody is looking at, which on a phone is radio wake-ups and battery. Skipping
-  // while hidden changes nothing on screen: `visibilitychange` below refreshes on the way back,
-  // so the figure is already current by the time the page is visible again.
-  if (document.hidden) return;
-  try {
-    const res = await fetch(`/api/bid?item=${encodeURIComponent(bidItem.name)}`);
-    if (res.ok) {
-      const current = await res.json();
-      updateBidDisplay(current && current.amount ? current : null);
-    }
-  } catch (e) {
-    // offline / static hosting — leave starting price shown
-  }
-}
-
-async function submitBid() {
-  const errorEl = document.getElementById("bid-error");
-  const nameInput = document.getElementById("bid-name");
-  const amountInput = document.getElementById("bid-amount");
-  errorEl.hidden = true;
-
-  const name = nameInput.value.trim();
-  const amount = Number(amountInput.value);
-  const minBid = Number(amountInput.min);
-
-  if (!name || !amount || amount < minBid) {
-    errorEl.textContent = `Enter a name and a bid of at least $${minBid}.`;
-    errorEl.hidden = false;
-    return;
-  }
-
-  try {
-    const res = await fetch("/api/bid", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item: bidItem.name, amount, name }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      updateBidDisplay(data.current);
-      amountInput.value = "";
-    } else {
-      updateBidDisplay(data.current || null);
-      errorEl.textContent = data.error || "Someone already bid higher — try a higher amount.";
-      errorEl.hidden = false;
-    }
-  } catch (e) {
-    errorEl.textContent = "Couldn't reach the server — try again in a moment.";
-    errorEl.hidden = false;
-  }
-}
-
-// ---------- featured picks (card stack) — ranked by visitor clicks ----------
-// Used as the tiebreak/starting order until real click counts overtake it.
-// Fallback order for the featured stack, read from the `featured` flags in products.json rather
-// than a hardcoded list of names. Real visitor clicks still outrank it — this only decides the
-// order before anyone has clicked anything, and breaks ties after.
-function defaultFeaturedOrder() {
-  return PRODUCTS.filter((p) => p.featured).map((p) => p.name);
-}
-
+// ---------- click tracking ----------
+// The featured-picks stack that ranked products by these counts is gone, but the counts are still
+// recorded: /api/click and /api/stats are untouched, and the admin side still has the data. What
+// went with the stack is the GET on page load — nothing in the storefront reads the totals any
+// more, so fetching them was a request a phone paid for and never used.
 let clickCounts = {};
-let FEATURED = [];
-
-async function loadClickCounts() {
-  try {
-    const res = await fetch("/api/stats");
-    if (res.ok) clickCounts = await res.json();
-  } catch (e) {
-    // no backend available (e.g. static hosting) — fall back to default order
-  }
-}
 
 // Recomputed on page load only, not mid-session, so cards don't shuffle under a browsing visitor.
 function trackClick(name) {
@@ -741,159 +595,6 @@ function trackClick(name) {
     headers: { "Content-Type": "application/json" },
     body,
   }).catch(() => {});
-}
-
-// Flagged products come first, then the most-clicked fill whatever slots are left.
-//
-// This used to sort by clicks and consult `featured` only to break ties, which meant the flag did
-// nothing the moment any product had a single click: marking a product Featured in the dashboard
-// changed products.json correctly, and the storefront still showed the four most-clicked items.
-// The flag is an instruction from the owner, so it now wins outright; clicks order the products
-// within each group, and a catalog with nothing flagged still ranks purely by clicks as before.
-function computeFeatured(n = 4) {
-  const flagged = new Set(defaultFeaturedOrder());
-  const byClicks = (a, b) => (clickCounts[b.name] || 0) - (clickCounts[a.name] || 0);
-  const picked = PRODUCTS.filter((p) => flagged.has(p.name)).sort(byClicks);
-  if (picked.length >= n) return picked.slice(0, n);
-  const rest = PRODUCTS.filter((p) => !flagged.has(p.name)).sort(byClicks);
-  return picked.concat(rest).slice(0, n);
-}
-
-function featuredStatsFor(p) {
-  const sizes = sizesOf(p);
-  return [
-    ["Sizes", sizes.length > 1 ? `${sizes[0]}–${sizes[sizes.length - 1]}` : sizes[0]],
-    ["Units", String(p.stock)],
-    ["Price", `$${p.price}`],
-    ["Status", p.status === "sold" ? "Sold Out" : "Available"],
-  ];
-}
-
-const STACK_CARD_WIDTH = 320;
-const STACK_CARD_OVERLAP = 240;
-let stackExpanded = false;
-let stackHoveredIndex = null;
-
-function stackPose(index, total, expanded) {
-  if (!expanded) {
-    const centerOffset = (total - 1) * 5;
-    return {
-      x: index * 10 - centerOffset,
-      y: index * 2,
-      rot: index * 1.5,
-    };
-  }
-  const totalExpandedWidth = STACK_CARD_WIDTH + (total - 1) * (STACK_CARD_WIDTH - STACK_CARD_OVERLAP);
-  const expandedCenterOffset = totalExpandedWidth / 2;
-  return {
-    x: index * (STACK_CARD_WIDTH - STACK_CARD_OVERLAP) - expandedCenterOffset + STACK_CARD_WIDTH / 2,
-    y: 0,
-    rot: index * 5 - (total - 1) * 2.5,
-  };
-}
-
-function renderFeatured() {
-  const wrap = document.getElementById("stack-wrap");
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  FEATURED = computeFeatured();
-
-  wrap.innerHTML = FEATURED.map((p, index) => `
-    <div class="stack-card" style="z-index:${FEATURED.length - index}" data-index="${index}" tabindex="0">
-      <dl class="stack-specs">
-        ${featuredStatsFor(p).map(([label, value]) => `<div class="stack-spec"><dd class="stack-spec-value">${value}</dd><dt class="stack-spec-label">${label}</dt></div>`).join("")}
-      </dl>
-      <div class="stack-image">${p.img ? `<img src="${p.img}" alt="${p.name}" loading="lazy" decoding="async">` : `<span>Photo Coming</span>`}</div>
-      <span class="stack-brand${hasBrand(p) ? "" : " card-brand-missing"}">${p.brand}</span>
-      <span class="stack-title">${p.name}</span>
-      <span class="stack-subtitle">${p.category}</span>
-      <p class="stack-desc">${p.desc}</p>
-    </div>
-  `).join("");
-
-  applyStackPoses(reduced);
-
-  wrap.querySelectorAll(".stack-card").forEach((card) => {
-    const index = Number(card.dataset.index);
-
-    card.addEventListener("mouseenter", () => {
-      stackHoveredIndex = index;
-      applyStackPoses(reduced);
-    });
-    card.addEventListener("mouseleave", () => {
-      stackHoveredIndex = null;
-      applyStackPoses(reduced);
-    });
-    card.addEventListener("focus", () => {
-      stackHoveredIndex = index;
-      applyStackPoses(reduced);
-    });
-    card.addEventListener("blur", () => {
-      stackHoveredIndex = null;
-      applyStackPoses(reduced);
-    });
-  });
-}
-
-function applyStackPoses(reduced) {
-  const wrap = document.getElementById("stack-wrap");
-  wrap.querySelectorAll(".stack-card").forEach((card, index) => {
-    const pose = stackPose(index, FEATURED.length, stackExpanded);
-    const isHovered = stackExpanded && stackHoveredIndex === index;
-    const isDimmed = stackExpanded && stackHoveredIndex !== null && stackHoveredIndex !== index;
-
-    card.style.transitionDelay = stackExpanded && !reduced ? `${index * 40}ms` : "0ms";
-    card.style.setProperty("--sx", `${pose.x}px`);
-    card.style.setProperty("--sy", `${isHovered ? pose.y - 18 : pose.y}px`);
-    card.style.setProperty("--srot", reduced ? "0deg" : `${pose.rot}deg`);
-    card.style.setProperty("--sscale", isHovered ? "1.14" : isDimmed ? "0.94" : "1");
-    card.style.setProperty("--sopacity", isDimmed ? "0.75" : "1");
-    card.style.zIndex = isHovered ? String(FEATURED.length + 10) : String(FEATURED.length - index);
-  });
-}
-
-// Spreads the stack on hover; whichever card is hovered scales up and becomes the focal point.
-// Click still expands/opens on touch devices, which don't fire hover events.
-function initStack() {
-  const wrap = document.getElementById("stack-wrap");
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  const expand = () => {
-    if (stackExpanded) return;
-    stackExpanded = true;
-    wrap.setAttribute("aria-expanded", "true");
-    applyStackPoses(reduced);
-  };
-  const collapse = () => {
-    if (!stackExpanded) return;
-    stackExpanded = false;
-    stackHoveredIndex = null;
-    wrap.setAttribute("aria-expanded", "false");
-    applyStackPoses(reduced);
-  };
-
-  wrap.addEventListener("mouseenter", expand);
-  wrap.addEventListener("mouseleave", collapse);
-  wrap.addEventListener("focusin", expand);
-  wrap.addEventListener("focusout", (e) => {
-    if (!wrap.contains(e.relatedTarget)) collapse();
-  });
-
-  wrap.addEventListener("click", (e) => {
-    if (!stackExpanded) {
-      expand();
-      return;
-    }
-    const card = e.target.closest(".stack-card");
-    if (card) openModal(FEATURED[Number(card.dataset.index)]);
-  });
-  wrap.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      if (!stackExpanded) expand();
-      else if (stackHoveredIndex !== null) openModal(FEATURED[stackHoveredIndex]);
-    }
-  });
 }
 
 function renderCategoryTiles() {
@@ -2222,27 +1923,13 @@ function initTilt() {
 document.addEventListener("DOMContentLoaded", async () => {
   initIntro();
   initSignup();
-  // Everything below renders prices and stock, so both files must land first. products.json and
-  // the click counts don't depend on each other and share one round trip; loadPricing() has to
-  // follow, because it walks PRODUCTS to stash base prices and PRODUCTS doesn't exist until
-  // loadProducts() has run.
+  // Everything below renders prices and stock, so both files must land first. loadPricing() has
+  // to follow loadProducts(), because it walks PRODUCTS to stash base prices and PRODUCTS does
+  // not exist until loadProducts() has run.
   await loadProducts();
-  loadClickCounts().catch(() => {});
   await loadPricing();
-  renderFeatured();
-  initStack();
-  renderBidCard();
-  // No 6-second poll. A recurring fetch never lets iOS Safari's page-load indicator go idle, so
-  // the spinner in the address bar turned forever on a phone even though the page had finished
-  // rendering. Confirmed by A/B on the LAN: identical builds on two ports, the only difference
-  // being this line, and the spinner stopped only on the build without it.
-  //
-  // The bid figure still refreshes on load and every time the page becomes visible again, which
-  // is when a viewer can actually see it change. Coming back to the tab is the moment that
-  // mattered anyway — nobody watches a number tick while looking at it.
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refreshBidState();
-  });
+  // The visibilitychange listener that refreshed the bid figure went with the bid section. The
+  // rule it existed to honour still stands: nothing here may poll the network on a timer.
   renderCategoryTiles();
   renderSizeFilter();
   renderProducts();

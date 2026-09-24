@@ -323,8 +323,11 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
   transition-delay: 0.08s;
 }
 
-/* ---------- hero ---------- */
-.hero { padding: 120px 0 100px; border-bottom: 1px solid var(--gray-900); }
+/* ---------- hero ----------
+   Short on purpose. It states who this is and hands straight over to the grid — the tiles and the
+   first row of products now start inside the first screen on a phone. The old 120/100 masthead,
+   plus Featured Picks and Bid of the Week beneath it, put the first product 4.25 screens down. */
+.hero { padding: 72px 0 44px; border-bottom: 1px solid var(--gray-900); }
 
 .eyebrow {
   font-family: 'JetBrains Mono', monospace;
@@ -332,21 +335,22 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--gray-500);
-  margin: 0 0 20px;
+  margin: 0 0 14px;
 }
 
 .hero h1 {
-  font-size: clamp(42px, 7vw, 84px);
+  /* Floor lowered from 42px: at 42 the two lines filled a third of a 390px screen on their own. */
+  font-size: clamp(34px, 6.4vw, 72px);
   line-height: 0.98;
   color: var(--white);
 }
 
 .hero-sub {
-  max-width: 480px;
+  max-width: 440px;
   color: var(--gray-300);
-  font-size: 17px;
-  line-height: 1.6;
-  margin: 28px 0 40px;
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 16px 0 0;
 }
 
 /* ---------- buttons ---------- */
@@ -376,23 +380,27 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
 /* ---------- sections ---------- */
-.stock, .how, .contact { padding: 100px 0; border-bottom: 1px solid var(--gray-900); }
+.how, .contact { padding: 100px 0; border-bottom: 1px solid var(--gray-900); }
+/* Tighter at the top than the other sections: the grid should begin right below the hero. */
+.stock { padding: 40px 0 88px; border-bottom: 1px solid var(--gray-900); }
 
-.section-head { margin-bottom: 48px; }
+.section-head { margin-bottom: 32px; }
 
 .section-head h2 {
   font-size: clamp(28px, 4vw, 42px);
   color: var(--white);
 }
 
-.section-note { color: var(--gray-500); font-size: 14px; margin: 10px 0 32px; }
+.section-note { color: var(--gray-500); font-size: 14px; margin: 10px 0 24px; }
 
-/* ---------- shop by category (tile grid) ---------- */
+/* ---------- category tiles ----------
+   These carry no heading of their own — they ARE the category navigation, and a "Shop by Category"
+   title above self-explanatory tiles was a band of pure label between the hero and the grid. */
 .category-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 14px;
-  margin-bottom: 56px;
+  margin-bottom: 36px;
 }
 
 .category-tile {
@@ -579,106 +587,6 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
   padding: 60px 0;
 }
 
-/* ---------- featured picks (card stack) ---------- */
-.featured { padding: 100px 0 60px; border-bottom: 1px solid var(--gray-900); }
-
-.stack-wrap {
-  position: relative;
-  margin: 0 auto;
-  min-height: 480px;
-  width: 100%;
-  max-width: 1200px;
-  cursor: pointer;
-  outline: none;
-}
-
-.stack-card {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 100%;
-  max-width: 320px;
-  margin-left: -160px;
-  padding: 22px;
-  border-radius: 18px;
-  background: rgba(31,31,35,0.75);
-  border: 1px solid rgba(255,255,255,0.08);
-  backdrop-filter: blur(18px) saturate(140%);
-  box-shadow: 0 8px 30px rgba(0,0,0,0.45);
-  transition: transform 480ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 300ms ease, border-color 0.25s ease, box-shadow 0.25s ease;
-  transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--srot, 0deg)) scale(var(--sscale, 1));
-  opacity: var(--sopacity, 1);
-  will-change: transform;
-  outline: none;
-}
-
-.stack-card:hover,
-.stack-card:focus-visible {
-  border-color: rgba(255,255,255,0.16);
-  box-shadow: 0 16px 50px rgba(0,0,0,0.6);
-}
-.stack-card:focus-visible { outline: 2px solid var(--gray-500); outline-offset: 4px; }
-
-.stack-specs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0 0 14px;
-}
-
-.stack-spec { display: flex; flex-direction: column; min-width: 0; margin: 0; }
-.stack-spec-value {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  color: var(--gray-500);
-  overflow-wrap: break-word;
-  margin: 0;
-}
-.stack-spec-label {
-  font-size: 11px;
-  color: var(--gray-100);
-  margin: 2px 0 0;
-  overflow-wrap: break-word;
-}
-
-.stack-image {
-  aspect-ratio: 16 / 11;
-  border-radius: 10px;
-  background: repeating-linear-gradient(135deg, var(--gray-900) 0px, var(--gray-900) 2px, var(--charcoal) 2px, var(--charcoal) 14px);
-  border: 1px solid var(--gray-800);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-.stack-image span {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--gray-500);
-}
-
-.stack-title {
-  display: block;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--white);
-  margin-top: 16px;
-}
-.stack-subtitle {
-  display: block;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--gray-500);
-}
-.stack-desc { font-size: 13px; color: var(--gray-300); line-height: 1.5; margin: 8px 0 0; }
-
-@media (prefers-reduced-motion: reduce) {
-  .stack-card { transition: transform 200ms ease-out; }
-}
-
 /* ---------- product grid ---------- */
 .grid {
   display: grid;
@@ -719,7 +627,6 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 }
 
 .card-media img,
-.stack-image img,
 .modal-media img {
   width: 100%;
   height: 100%;
@@ -915,80 +822,6 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 
 .step h3 { color: var(--white); font-size: 18px; margin: 14px 0 8px; }
 .step p { color: var(--gray-300); font-size: 14px; line-height: 1.6; margin: 0; }
-
-/* ---------- bid of the week ---------- */
-.bid-week { padding: 100px 0; border-bottom: 1px solid var(--gray-900); }
-
-.bid-card {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  background: var(--gray-950);
-  border: 1px solid var(--gray-900);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-@media (max-width: 560px) {
-  .bid-card { grid-template-columns: 1fr; }
-}
-
-.bid-card-media {
-  aspect-ratio: 4 / 5;
-  overflow: hidden;
-  background: repeating-linear-gradient(135deg, var(--gray-900) 0px, var(--gray-900) 2px, var(--gray-950) 2px, var(--gray-950) 14px);
-}
-.bid-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
-
-.bid-card-info { padding: 30px 28px; display: flex; flex-direction: column; }
-.bid-card-info h3 { font-size: 22px; color: var(--white); margin: 10px 0 6px; text-transform: uppercase; }
-.bid-card-info .card-meta { margin: 0 0 6px; }
-.bid-card-desc { color: var(--gray-300); font-size: 14px; line-height: 1.6; margin: 0; }
-
-.bid-current {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 20px 0;
-  padding: 14px 16px;
-  border: 1px solid var(--gray-800);
-  border-radius: 12px;
-}
-.bid-current-label {
-  display: block;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--gray-500);
-  margin-bottom: 4px;
-}
-.bid-current-amount { font-size: 28px; font-weight: 700; color: var(--white); }
-.bid-current-name {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--gray-500);
-}
-
-.bid-form { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-.bid-form input {
-  background: var(--gray-950);
-  border: 1px solid var(--gray-800);
-  border-radius: 10px;
-  padding: 10px 14px;
-  color: var(--gray-100);
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 14px;
-  outline: none;
-  flex: 1;
-  min-width: 110px;
-}
-.bid-form input::placeholder { color: var(--gray-700); }
-.bid-form input:focus { border-color: var(--gray-500); }
-.bid-form button { flex-shrink: 0; }
-
-.bid-error { color: #ff6b6b; font-size: 13px; margin: 8px 0 0; }
-.bid-note { color: var(--gray-500); font-size: 12px; line-height: 1.5; margin: 10px 0 0; }
 
 /* ---------- item detail modal ---------- */
 .modal-overlay {
@@ -1380,8 +1213,7 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 }
 
 /* ---------- brand line (designer name, shown above every product title) ---------- */
-.card-brand,
-.stack-brand {
+.card-brand {
   display: block;
   margin: 0 0 4px;
   font-family: 'JetBrains Mono', monospace;
@@ -1392,7 +1224,6 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
   color: var(--white);
 }
 
-.stack-brand { margin-bottom: 2px; }
 
 #modal-brand {
   margin: 10px 0 2px;
@@ -1619,30 +1450,73 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin: 0; }
   }
 }
 
-/* The featured stack positions its cards with fixed 320px pose math, which overhangs a phone
-   viewport. Clip at the wrap so the spread can't widen the document; `clip` rather than `hidden`
-   so no scroll container is created around the absolutely-positioned cards. */
-@media (max-width: 820px) {
-  .stack-wrap {
-    overflow-x: hidden;
-    overflow-x: clip;
-  }
+/* ---------- reduced vertical rhythm on phones ----------
+   Desktop padding is sized for a desktop-length scroll; on a 390-430px phone the same figures read
+   as dead space between sections. With Featured Picks and Bid of the Week gone there are three
+   sections left, so this only has to keep the hero from owning the first screen. Desktop keeps its
+   own spacing. */
+@media (max-width: 640px) {
+  .hero { padding: 36px 0 26px; }
+  .stock { padding: 22px 0 52px; }
+  .how,
+  .contact { padding: 52px 0; }
+  .section-head { margin-bottom: 24px; }
+  .category-tiles { margin-bottom: 28px; }
 }
 
-/* ---------- reduced vertical rhythm on phones ----------
-   Every section carries 100-120px of top/bottom padding sized for a desktop-length scroll. On a
-   390-430px phone that reads as dead space between sections — close to a full screen of empty
-   black between the hero and Featured Picks, and again between Bid of the Week and Shop by
-   Category. Trimmed here so five stacked sections don't compound into several viewport-heights of
-   nothing; desktop keeps the original spacing untouched. */
+/* ---------- anchors clear the sticky header ----------
+   The header is fixed, so "Shop" and "How It Works" used to scroll their section's heading to
+   y=0 — underneath the header, which covers it. scroll-padding-top is the one-property fix and it
+   applies to the smooth scroll the nav already uses. Two values because the header becomes two
+   rows under 820px (measured: 73px desktop, 103px phone). */
+html { scroll-padding-top: 88px; }
+@media (max-width: 820px) {
+  html { scroll-padding-top: 118px; }
+}
+
+/* ---------- filters stop eating the screen on a phone ----------
+   Measured before this block: 144px of controls plus 152px of wrapped size chips put 404px — most
+   of a 390x844 screen — between the "All Stock" heading and the first product. Desktop lays the
+   same controls out in 195px and is left alone. Nothing is removed or hidden; the same controls
+   are simply given a layout that suits the width. */
 @media (max-width: 640px) {
-  .hero { padding: 64px 0 48px; }
-  .featured { padding: 56px 0 40px; }
-  .bid-week,
-  .stock,
-  .how,
-  .contact { padding: 56px 0; }
-  .section-head { margin-bottom: 32px; }
+  .catalog-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: center;
+  }
+  /* Search is the one people reach for, so it keeps a full row of its own. `order` matters: in
+     DOM order the in-stock checkbox sits BETWEEN the price range and the sort control, so a
+     full-width checkbox split those two onto separate rows and made the block four rows tall.
+     Moving it last pairs price with sort and saves a row. */
+  .search-field { grid-column: 1 / -1; order: 1; }
+  .price-range { order: 2; }
+  .select-field { order: 3; }
+  .price-range,
+  .select-field { min-width: 0; }
+  /* The "Sort by" label wrapped the select onto a second line in a half-width column, which made
+     the whole control block TALLER than the wrapped flex layout it replaced. The select's own
+     options say what it does; aria-label on it keeps the accessible name. */
+  .select-field span { display: none; }
+  .select-field select { width: 100%; min-width: 0; }
+  .price-range input { min-width: 0; }
+  .checkbox-field { grid-column: 1 / -1; order: 4; }
+
+  /* 15 chips wrapped to four rows. One row that scrolls sideways reads as a filter strip rather
+     than a wall, and keeps the grid in view while you pick a size. The negative margin plus
+     matching padding lets the strip bleed to the screen edge, so the last chip doesn't look cut
+     off at the gutter. */
+  .size-filter {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    margin: 14px -16px 20px;
+    padding: 0 16px;
+  }
+  .size-filter::-webkit-scrollbar { display: none; }
+  .size-chip { flex: 0 0 auto; }
 }
 
 /* Narrowest phones: drop the "Follow" wordmark to its icon so the top row still fits. */
@@ -2185,7 +2059,6 @@ body { padding-bottom: var(--footer-h); }
         same colour, same hue, just more of it — to keep the separation the blur was providing. */
   .site-header { backdrop-filter: none; background: rgba(10,10,11,0.94); }
   .site-footer { backdrop-filter: none; background: rgba(10,10,11,0.97); }
-  .stack-card  { backdrop-filter: none; background: rgba(31,31,35,0.93); }
   /* one class covers the item, checkout, cart and orders overlays */
   .modal-overlay { backdrop-filter: none; background: rgba(6,6,7,0.94); }
   .lightbox-overlay { backdrop-filter: none; background: rgba(8,8,9,0.97); }
