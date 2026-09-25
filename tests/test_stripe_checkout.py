@@ -48,6 +48,9 @@ def _load(name, path):
     return mod
 
 
+REAL_STOREFRONT_CATEGORIES = None
+
+
 def setUpModule():
     """Boot a real server against a throwaway database, with Stripe faked at the transport."""
     global server, stripe_client, orders, store, httpd, BASE, _tmpdir
@@ -68,6 +71,21 @@ def setUpModule():
     orders = server.orders
     store = server.store
     server.bootstrap()
+
+    # ---- merchandising is lifted for this suite, deliberately -----------------------------------
+    # This file exercises the ORDER AND PAYMENT PIPELINE: pricing, reservations, webhooks, sweeps,
+    # inventory conservation. Its fixtures buy Shirts because Shirts carry the only real bulk
+    # ladder in the catalogue (24.99 / 21 / 18 / 16), which is exactly what the server-side pricing
+    # tests exist to check.
+    #
+    # WHICH categories the shop is selling this week is a different question, and answering it here
+    # would mean these tests failed every time the owner changed the shop's range. So the real list
+    # is captured and the gate is opened for the pipeline tests;
+    # TestStorefrontAllowlistServerSide puts the real one back for its own tests, and the parity
+    # test in tests/test_shipping_weights.py is what guards the configured value.
+    global REAL_STOREFRONT_CATEGORIES
+    REAL_STOREFRONT_CATEGORIES = orders.STOREFRONT_CATEGORIES
+    orders.STOREFRONT_CATEGORIES = None
 
     # Fake transport. Everything above it — parameter building, amounts, idempotency keys — is the
     # real code; only the socket is replaced.
@@ -1080,6 +1098,166 @@ class TestManualQuoteLifecycle(unittest.TestCase):
         m = re.search(r"const MANUAL_QUOTE_HOLD_HOURS = ([0-9.]+)", src)
         self.assertIsNotNone(m, "MANUAL_QUOTE_HOLD_HOURS not found in script.js")
         self.assertEqual(float(m.group(1)) * 3600, float(orders.MANUAL_QUOTE_TTL_SECONDS))
+
+
+# ---------- a category the shop is not selling cannot be bought --------------------------------------
+class TestStorefrontAllowlistServerSide(unittest.TestCase):
+    """The storefront hides these products; this is the half that refuses to SELL them.
+
+    Hiding them in script.js stops anyone reaching them by browsing, but the browser is not the
+    only way to POST. Every customer money path — the shipping quote, /api/order and the Stripe
+    checkout session — resolves products through orders.quote(), so the gate sits there and all
+    three are covered by one check.
+    """
+
+    def setUp(self):
+        # setUpModule lifts the gate for the pipeline tests; this class is the one that tests the
+        # gate, so it puts the shop's real range back for the duration of each of its own tests.
+        self._saved = orders.STOREFRONT_CATEGORIES
+        orders.STOREFRONT_CATEGORIES = REAL_STOREFRONT_CATEGORIES
+        self.addCleanup(lambda: setattr(orders, "STOREFRONT_CATEGORIES", self._saved))
+
+    def _hidden(self):
+        """A real, in-stock product whose category the shop is not currently selling."""
+        conn = db()
+        try:
+            allowed = orders.STOREFRONT_CATEGORIES
+            self.assertIsNotNone(allowed, "allowlist is off; these tests assume it is on")
+            row = conn.execute(
+                """SELECT p.id, p.name, p.category, a.size, a.available_qty FROM products p
+                   JOIN size_availability a ON a.product_id = p.id
+                   WHERE p.status='available' AND a.available_qty > 0
+                     AND p.category NOT IN (%s)
+                   ORDER BY a.available_qty DESC LIMIT 1""" % ",".join("?" * len(allowed)),
+                allowed).fetchone()
+            assert row is not None, "no hidden-category product in the catalogue to test with"
+            return dict(row)
+        finally:
+            conn.close()
+
+    def _allowed(self):
+        conn = db()
+        try:
+            allowed = orders.STOREFRONT_CATEGORIES
+            row = conn.execute(
+                """SELECT p.id, p.name, p.category, a.size, a.available_qty FROM products p
+                   JOIN size_availability a ON a.product_id = p.id
+                   WHERE p.status='available' AND a.available_qty > 0
+                     AND p.category IN (%s)
+                   ORDER BY a.available_qty DESC LIMIT 1""" % ",".join("?" * len(allowed)),
+                allowed).fetchone()
+            assert row is not None, "no sellable product in the catalogue to test with"
+            return dict(row)
+        finally:
+            conn.close()
+
+    # ---- the hidden product is refused on all three paths ------------------------------------
+    def test_shipping_quote_refuses_it(self):
+        h = self._hidden()
+        status, out = post("/api/shipping/quote", {
+            "zip": "90210",
+            "items": [{"id": h["id"], "name": h["name"], "size": h["size"], "qty": 1}]})
+        self.assertNotEqual(status, 200, out)
+        self.assertFalse(out.get("ok"))
+
+    def test_order_refuses_it(self):
+        h = self._hidden()
+        before = available_qty(h["id"], h["size"])
+        status, out = post("/api/order", {
+            "email": "x@example.com", "idempotency_key": f"hidden-{time.time()}",
+            "ship_to": dict(SHIP_TO),
+            "items": [{"id": h["id"], "name": h["name"], "size": h["size"], "qty": 1}]})
+        self.assertEqual(status, 409, out)
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(available_qty(h["id"], h["size"]), before,
+                         "a refused order must not reserve stock")
+
+    def test_stripe_checkout_refuses_it(self):
+        h = self._hidden()
+        status, out = post("/api/checkout/session", {
+            "email": "x@example.com", "idempotency_key": f"hidden-co-{time.time()}",
+            "ship_to": dict(SHIP_TO),
+            "items": [{"id": h["id"], "name": h["name"], "size": h["size"], "qty": 1}]})
+        self.assertEqual(status, 409, out)
+        self.assertFalse(out.get("ok"))
+
+    def test_it_is_refused_by_NAME_too_not_just_by_id(self):
+        """_resolve_product falls back to the display name and to "<brand> <name>". Gating only the
+        id path would leave both of those open."""
+        h = self._hidden()
+        for key in ("id", "name"):
+            item = {"size": h["size"], "qty": 1}
+            item[key] = h[key] if key == "id" else h["name"]
+            if key == "name":
+                item["name"] = h["name"]
+            status, out = post("/api/order", {
+                "email": "x@example.com", "idempotency_key": f"hidden-{key}-{time.time()}",
+                "ship_to": dict(SHIP_TO), "items": [item]})
+            self.assertEqual(status, 409, f"{key} path was not refused: {out}")
+
+    def test_the_refusal_does_not_confirm_the_product_exists(self):
+        """Same wording as a product that was never there. Distinguishing them would tell a
+        stranger which hidden products are real and in stock."""
+        h = self._hidden()
+        _s, hidden_out = post("/api/order", {
+            "email": "x@example.com", "idempotency_key": f"h1-{time.time()}",
+            "ship_to": dict(SHIP_TO),
+            "items": [{"name": h["name"], "size": h["size"], "qty": 1}]})
+        _s, absent_out = post("/api/order", {
+            "email": "x@example.com", "idempotency_key": f"h2-{time.time()}",
+            "ship_to": dict(SHIP_TO),
+            "items": [{"name": "No Such Product At All", "size": "M", "qty": 1}]})
+        self.assertEqual(hidden_out["error"].replace(h["name"], "X"),
+                         absent_out["error"].replace("No Such Product At All", "X"))
+
+    # ---- and a sellable one still completes the whole path -------------------------------------
+    def test_a_sellable_product_still_checks_out(self):
+        a = self._allowed()
+        before = available_qty(a["id"], a["size"])
+        status, out = post("/api/order", {
+            "email": "buyer@example.com", "idempotency_key": f"allowed-{time.time()}",
+            "ship_to": dict(SHIP_TO),
+            "items": [{"id": a["id"], "name": a["name"], "size": a["size"], "qty": 1}]})
+        self.assertEqual(status, 200, out)
+        self.assertTrue(out["ok"])
+        row = order_row(out["ref"])
+        self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["subtotal_cents"], 0)
+        self.assertGreater(row["shipping_cents"], 0, "shipping still priced")
+        self.assertEqual(row["total_cents"], row["subtotal_cents"] + row["shipping_cents"])
+        self.assertEqual(available_qty(a["id"], a["size"]), before - 1, "stock reserved")
+
+    def test_a_sellable_product_still_reaches_stripe(self):
+        a = self._allowed()
+        before = len(stripe_calls)
+        status, out = post("/api/checkout/session", {
+            "email": "buyer@example.com", "idempotency_key": f"allowed-co-{time.time()}",
+            "ship_to": dict(SHIP_TO),
+            "items": [{"id": a["id"], "name": a["name"], "size": a["size"], "qty": 1}]})
+        self.assertEqual(status, 200, out)
+        params = stripe_calls[before]["params"]
+        charged = sum(i["price_data"]["unit_amount"] * i["quantity"] for i in params["line_items"])
+        charged += params["shipping_options"][0]["shipping_rate_data"]["fixed_amount"]["amount"]
+        self.assertEqual(charged, order_row(out["ref"])["total_cents"])
+
+    # ---- admin is untouched --------------------------------------------------------------------
+    def test_admin_still_sees_every_product(self):
+        """The gate lives in db/orders.py, which the admin dashboard never calls — it reads through
+        db/store.py. Hiding a category from the shop must not hide it from the owner."""
+        src = open(os.path.join(APP_DIR, "db", "store.py"), encoding="utf-8").read()
+        self.assertNotIn("STOREFRONT_CATEGORIES", src,
+                         "the admin read path must not be filtered by the sales allowlist")
+        conn = db()
+        try:
+            n = conn.execute("SELECT COUNT(*) c FROM products").fetchone()["c"]
+            hidden = conn.execute(
+                "SELECT COUNT(*) c FROM products WHERE category NOT IN (%s)"
+                % ",".join("?" * len(orders.STOREFRONT_CATEGORIES)),
+                orders.STOREFRONT_CATEGORIES).fetchone()["c"]
+        finally:
+            conn.close()
+        self.assertGreater(hidden, 0, "expected hidden products to still exist in the database")
+        self.assertEqual(n, 20, "products were deleted rather than hidden")
 
 
 # ---------- the secret file is not served ------------------------------------------------------------
