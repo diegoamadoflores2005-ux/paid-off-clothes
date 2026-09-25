@@ -37,6 +37,16 @@ _last_sweep = 0.0
 # category list as well as against the JS.
 CATEGORY_WEIGHT_OZ = {"Shirts": 7, "Belts": 10, "Shoes": 40, "Bags": 32,
                       "Shorts": 9, "Tracksuits": 28}
+
+# Which categories may be BOUGHT. Mirrors STOREFRONT_CATEGORIES in script.js, and
+# test_storefront_allowlist_parity fails if the two lists drift — the same rule the weight tables
+# live under, and for the same reason: the JS decides what a customer is shown, this decides what
+# the server will sell, and a shop that displays one set and sells another is the bug.
+#
+# This is a SALES gate, not a data change. Nothing is deleted: inventory, prices, photos and the
+# admin dashboard still see every product, because admin reads through db/store.py and never
+# resolves a product through this module. Set to None to sell everything again.
+STOREFRONT_CATEGORIES = ["Belts", "Shoes", "Bags"]
 DEFAULT_WEIGHT_OZ = 8
 PACKAGING_OZ = 3
 SHIPPING_TIERS = [(15.99, 550), (16, 761), (32, 850), (48, 950), (80, 1200), (160, 1700)]
@@ -264,6 +274,16 @@ def quote(conn, requested, dest_zip=None):
 
         p = _resolve_product(conn, item.get("id"), name)
         if p is None:
+            raise OrderError(f"“{name}” is no longer available.")
+        # A category the shop is not currently selling is refused here, at the ONE place every
+        # customer money path resolves a product: the shipping quote, /api/order and the Stripe
+        # checkout session all reach this line through quote(). The storefront already hides these
+        # products, so the only way to arrive here is a hand-crafted request.
+        #
+        # Deliberately the SAME message as a product that does not exist. Distinguishing them would
+        # confirm to a stranger that a hidden product is real and in stock, and to an ordinary buyer
+        # with a stale tab the two cases mean the same thing: you cannot have this.
+        if STOREFRONT_CATEGORIES is not None and p["category"] not in STOREFRONT_CATEGORIES:
             raise OrderError(f"“{name}” is no longer available.")
         if p["status"] == "sold":
             raise OrderError(f"“{name}” is sold out.")

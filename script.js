@@ -7,6 +7,28 @@
 // loadCart and the pricing helpers all close over this binding, so replacing it would leave half
 // the site pointing at a stale array.
 
+// ---------- EDIT THIS: which categories the storefront sells ----------
+// An ALLOWLIST. A category not named here is hidden from the shop: no tile, no search hit, nothing
+// in "All", no size chips of its own, and any cart line restored from localStorage is dropped.
+//
+// It hides, it does not delete. products.json, the database, the admin dashboard, the photos,
+// pricing, inventory and every API are untouched, so bringing a category back is editing this one
+// line. Set to null to sell everything again.
+//
+// It is enforced in ONE place — loadProducts(), the only door products come through — so every
+// surface downstream is filtered by construction rather than by remembering to filter it. Adding a
+// new storefront view cannot reintroduce a hidden product, because PRODUCTS never holds one.
+const STOREFRONT_CATEGORIES = ["Belts", "Shoes", "Bags"];
+
+function isSellableCategory(category) {
+  return !STOREFRONT_CATEGORIES || STOREFRONT_CATEGORIES.includes(category);
+}
+
+// Names filtered out above, so validatePricing() can tell "hidden on purpose" from "typo". Without
+// this the console fills with false alarms about every hidden product's pricing entry, and the
+// real warnings — the ones that are the owner's only signal of a bad edit — get lost in them.
+const HIDDEN_BY_CATEGORY = new Set();
+
 const NEEDS_BRAND = "[brand?]";
 
 const PRODUCTS = [];
@@ -48,15 +70,25 @@ async function loadProducts() {
     const records = Array.isArray(doc) ? doc : doc.products || [];
 
     PRODUCTS.length = 0;
+    HIDDEN_BY_CATEGORY.clear();
     records.forEach((r) => {
       const p = productFromRecord(r);
-      if (p) PRODUCTS.push(p);
+      if (!p) return;
+      // The one gate. A product whose category is not sold never enters PRODUCTS, so it cannot
+      // reach a tile, a search result, "All", the size filter, the modal, or a restored cart.
+      if (!isSellableCategory(p.category)) {
+        HIDDEN_BY_CATEGORY.add(p.name);
+        return;
+      }
+      PRODUCTS.push(p);
     });
 
     const cats = Array.isArray(doc.categories) && doc.categories.length
       ? doc.categories.slice()
       : ["All", ...new Set(PRODUCTS.map((p) => p.category))];
-    CATEGORIES = cats[0] === "All" ? cats : ["All", ...cats];
+    // "All" is the storefront's own reset control, not a category in the file, so it survives the
+    // filter by name. Every other entry has to be sellable.
+    CATEGORIES = ["All", ...cats.filter((c) => c !== "All" && isSellableCategory(c))];
 
     PRODUCTS_LOADED = true;
     validateProducts(records);
@@ -498,6 +530,9 @@ function validatePricing() {
   const problems = [];
 
   Object.keys(PRICING.products).forEach((name) => {
+    // A pricing entry for a product hidden by STOREFRONT_CATEGORIES is expected, not a typo: the
+    // prices stay in the file precisely so the category can be switched back on unchanged.
+    if (HIDDEN_BY_CATEGORY.has(name)) return;
     if (!known.has(name)) problems.push(`"${name}" isn't a product in script.js — check the spelling.`);
   });
 

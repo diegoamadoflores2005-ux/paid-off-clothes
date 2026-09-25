@@ -1846,3 +1846,53 @@ class TestCoverage(unittest.TestCase):
         rates["cell_provenance"]["core.sub.near"]["verified"] = False
         rows = {r["group"]: r for r in self.orders.coverage_report(rates)}
         self.assertIn("sub", rows["near"]["missing_bands"])
+
+
+# ---------- the storefront allowlist is mirrored, so it must be checked ---------------------------
+class TestStorefrontAllowlist(unittest.TestCase):
+    """STOREFRONT_CATEGORIES exists twice: script.js decides what a customer is SHOWN, db/orders.py
+    decides what the server will SELL. A shop that displays one set and sells another is the bug,
+    and it is the exact shape of the CATEGORY_WEIGHT_OZ drift — two copies, one edited.
+    """
+
+    def js_list(self):
+        src = open(os.path.join(APP_DIR, "script.js"), encoding="utf-8").read()
+        m = re.search(r"const STOREFRONT_CATEGORIES = (null|\[[^\]]*\]);", src)
+        self.assertIsNotNone(m, "STOREFRONT_CATEGORIES not found in script.js")
+        raw = m.group(1)
+        return None if raw == "null" else re.findall(r'"([^"]+)"', raw)
+
+    def test_the_two_copies_agree(self):
+        orders = load_orders()
+        self.assertEqual(self.js_list(), orders.STOREFRONT_CATEGORIES,
+                         "script.js and db/orders.py disagree on which categories are sold")
+
+    def test_every_allowed_name_is_a_real_category(self):
+        """A typo here hides a category that should sell, silently — the tile vanishes and the
+        server refuses the order, with nothing anywhere saying why."""
+        orders = load_orders()
+        allowed = orders.STOREFRONT_CATEGORIES
+        if allowed is None:
+            return
+        real = set(json.load(open(os.path.join(APP_DIR, "products.json"), encoding="utf-8"))["categories"])
+        for c in allowed:
+            self.assertIn(c, real, f'"{c}" is not a category in products.json')
+
+    def test_allowed_categories_all_carry_a_shipping_weight(self):
+        """A sellable category with no CATEGORY_WEIGHT_OZ entry bills at the 8 oz fallback — the
+        bug that shipped every bag at 8 oz instead of 32."""
+        orders = load_orders()
+        for c in (orders.STOREFRONT_CATEGORIES or []):
+            self.assertIn(c, orders.CATEGORY_WEIGHT_OZ, f'"{c}" is sellable but has no weight')
+
+    def test_nothing_is_deleted_to_hide_it(self):
+        """The hidden categories and their products must still be in the data — the whole point is
+        that switching them back on is a one-line edit, not a restore."""
+        doc = json.load(open(os.path.join(APP_DIR, "products.json"), encoding="utf-8"))
+        orders = load_orders()
+        allowed = set(orders.STOREFRONT_CATEGORIES or [])
+        hidden = [c for c in doc["categories"] if c != "All" and c not in allowed]
+        self.assertTrue(hidden, "expected at least one hidden category in this configuration")
+        self.assertIn("Shirts", hidden)
+        self.assertTrue(any(p["category"] == "Shirts" for p in doc["products"]),
+                        "Shirts products were deleted rather than hidden")
